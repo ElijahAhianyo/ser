@@ -1,0 +1,101 @@
+mod lexer;
+mod error;
+mod ast;
+mod parser;
+mod interpreter;
+mod environment;
+mod token;
+
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::io;
+use std::io::{BufRead, Write};
+use std::process::exit;
+use lexer::Lexer;
+use parser::Parser;
+use crate::interpreter::Interpreter;
+
+
+#[derive(Debug, Clone, Default)]
+pub struct Lox {
+    had_error: bool,
+    had_runtime_error: bool,
+    interpreter: Interpreter
+}
+
+impl Lox {
+    fn new() -> Self{
+        Self { had_error: false, had_runtime_error: false, interpreter: Interpreter::new() }
+    }
+
+    fn main(&mut self, args: Vec<String>) {
+        match args.len() {
+            0 => self.run_prompt().unwrap(),
+            1 => self.run_file(&args[0]).unwrap(),
+            _ => {
+                println!("Usage: rlox [script]");
+            }
+        }
+    }
+
+    fn run<S: Into<String>>(&mut self, source: S){
+        let mut scanner = Lexer::new(source.into());
+        scanner.scan_tokens();
+        // println!("tokens: {:?}", scanner.tokens());
+        // for token in scanner.tokens(){
+        //     println!("{token:?}");
+        // }
+        let mut parser = Parser::new(scanner.tokens().clone());
+        let tree = parser.parse();
+        // println!("tree:\n\n {tree:?}");
+        let _ = self.interpreter.interpret(tree.unwrap());
+
+
+    }
+
+    fn run_file(&mut self, str_path: &str) -> io::Result<()> {
+        let bytes = fs::read_to_string(PathBuf::from_str(str_path).expect("invalid path"))?;
+        self.run(bytes);
+        if self.had_error{
+            exit(65);
+        }
+        if self.had_runtime_error{
+            exit(70);
+        }
+        Ok(())
+    }
+
+    fn run_prompt(&mut self) -> io::Result<()>{
+        let stdin = io::stdin();
+        let mut stdin_lock = stdin.lock();
+        let stdout = io::stdout();
+        let mut stdout_lock = stdout.lock();
+
+
+        loop{
+            stdout_lock.write_all(b">")?;
+            stdout_lock.flush()?;
+
+            let mut input = String::new();
+            let bytes_read = stdin_lock.read_line(&mut input)?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            let line = input.trim_end();
+            self.run(line);
+            self.had_error = false;
+
+        }
+        Ok(())
+    }
+}
+
+fn main() {
+    let args : Vec<String> = env::args().skip(1).collect();
+    let mut lox = Lox::new();
+    lox.main(args)
+}
