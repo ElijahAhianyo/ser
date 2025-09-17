@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::str::FromStr;
-use std::sync::OnceLock;
 use crate::ast::LiteralObject;
 use crate::token::{Token, TokenKind};
-
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Lexer {
@@ -13,17 +11,16 @@ pub(crate) struct Lexer {
     line: usize,
     start: usize,
     current: usize,
-
 }
 
 impl Lexer {
-    pub fn new(source: String) -> Self{
+    pub fn new(source: String) -> Self {
         Self {
             source: source.chars().collect::<Vec<_>>(),
             tokens: Vec::new(),
             line: 1,
             current: 0,
-            start: 0
+            start: 0,
         }
     }
 
@@ -87,37 +84,29 @@ impl Lexer {
                         self.advance();
                     }
                 }
-                    // detect c-style multi-line comment( /* ... */)
-                else if self.match_next('*'){
-                        while !self.match_next('/') && !self.match_next('/')  && !self.is_at_end() {
-                            self.advance();
-                        }
-                }
-                else {
-                        self.add_token(TokenKind::SLASH, None);
+                // detect c-style multi-line comment( /* ... */)
+                else if self.match_next('*') {
+                    while !self.match_next('/') && !self.match_next('/') && !self.is_at_end() {
+                        self.advance();
                     }
+                } else {
+                    self.add_token(TokenKind::SLASH, None);
+                }
             }
-            ' ' | '\t' | '\r' => {
-
-            }
+            ' ' | '\t' | '\r' => {}
             '\n' => {
                 self.line += 1;
             }
-            '"' => {
-                self.string()
-            }
+            '"' => self.string(),
 
             _ => {
-                if self.is_digit(c.into()){
+                if self.is_digit(c.into()) {
                     self.number();
-                }
-                else if self.is_alphanumeric(c.into())  {
+                } else if self.is_alphanumeric(c.into()) {
                     self.identifier();
-                }
-                else {
+                } else {
                     panic!("unsupported token");
                 }
-
             }
         }
     }
@@ -132,15 +121,17 @@ impl Lexer {
     }
 
     fn add_token(&mut self, token_type: TokenKind, literal: Option<LiteralObject>) {
-        let text = self.source[self.start..self.current].iter().collect::<String>();
-        self.tokens.push(Token::new(token_type, text, literal,self.line))
+        let text = self.source[self.start..self.current]
+            .iter()
+            .collect::<String>();
+        self.tokens
+            .push(Token::new(token_type, text, literal, self.line))
     }
 
     fn match_next(&mut self, expected: char) -> bool {
-        if self.is_at_end() || (self.source[self.current] != expected){
+        if self.is_at_end() || (self.source[self.current] != expected) {
             false
-        }
-        else{
+        } else {
             // only consume the next if its a match.
             self.current += 1;
             true
@@ -148,7 +139,7 @@ impl Lexer {
     }
 
     fn peek(&self) -> char {
-        if self.is_at_end(){
+        if self.is_at_end() {
             return '\0';
         }
         self.source[self.current]
@@ -163,7 +154,7 @@ impl Lexer {
 
     fn string(&mut self) {
         while self.peek() != '\"' && !self.is_at_end() {
-            if self.peek() == '\n'{
+            if self.peek() == '\n' {
                 self.line += 1;
             }
             self.advance();
@@ -175,7 +166,9 @@ impl Lexer {
 
         // the closing ".
         self.advance();
-        let value = self.source[self.start + 1.. self.current - 1].iter().collect::<String>();
+        let value = self.source[self.start + 1..self.current - 1]
+            .iter()
+            .collect::<String>();
         self.add_token(TokenKind::STRING, Some(LiteralObject::Str(value)))
     }
 
@@ -184,19 +177,26 @@ impl Lexer {
     }
 
     fn number(&mut self) {
-        while self.is_digit(self.peek().into()){
+        while self.is_digit(self.peek().into()) {
             self.advance();
         }
 
-        if self.peek() == '.' && self.is_digit(self.peek_next()){
+        if self.peek() == '.' && self.is_digit(self.peek_next()) {
             self.advance();
         }
 
-        while self.is_digit(self.peek().into()){
+        while self.is_digit(self.peek().into()) {
             self.advance();
         }
-        let content = self.source[self.start..self.current].iter().collect::<String>();
-        self.add_token(TokenKind::NUMBER, Some(LiteralObject::Number(f64::from_str(content.as_str()).unwrap())))
+        let content = self.source[self.start..self.current]
+            .iter()
+            .collect::<String>();
+        self.add_token(
+            TokenKind::NUMBER,
+            Some(LiteralObject::Number(
+                f64::from_str(content.as_str()).unwrap(),
+            )),
+        )
     }
 
     fn is_alpha(&self, c: char) -> bool {
@@ -208,7 +208,7 @@ impl Lexer {
     }
 
     fn identifier(&mut self) {
-        while self.is_alphanumeric(self.peek().into()){
+        while self.is_alphanumeric(self.peek().into()) {
             self.advance();
         }
 
@@ -218,11 +218,9 @@ impl Lexer {
 
         if let Some(ty) = ty {
             self.add_token(*ty, None)
-        }
-        else{
+        } else {
             self.add_token(TokenKind::IDENTIFIER, None)
         }
-
     }
 
     fn keywords() -> &'static HashMap<&'static str, TokenKind> {
@@ -248,12 +246,9 @@ impl Lexer {
             map.insert("true", TokenKind::TRUE);
             map
         })
-
     }
 
     pub fn tokens(&self) -> &Vec<Token> {
         &self.tokens
     }
-
 }
-

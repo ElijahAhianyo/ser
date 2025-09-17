@@ -1,21 +1,24 @@
-use std::collections::HashMap;
-use crate::interpreter::RuntimeError;
 use crate::ast::LiteralObject;
+use crate::interpreter::RuntimeError;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
-use std::collections::hash_map::Entry;
 use crate::token::Token;
+use std::collections::hash_map::Entry;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Default)]
-pub struct Environment{
+pub struct Environment {
     map: HashMap<String, Option<LiteralObject>>,
-    enclosing: Option<Box<Environment>>
+    enclosing: Option<Rc<RefCell<Environment>>>,
 }
 
-
 impl Environment {
-    pub fn new(enclosing_env: Option<Environment>) -> Self {
-        let enclosing_env = enclosing_env.map(|env| Box::new(env));
-        Self { map: HashMap::new(), enclosing: enclosing_env}
+    pub fn new(enclosing_env: Option<Rc<RefCell<Environment>>>) -> Self {
+        Self {
+            map: HashMap::new(),
+            enclosing: enclosing_env,
+        }
     }
 
     pub fn get(&self, token: &Token) -> Result<Option<LiteralObject>, RuntimeError> {
@@ -23,14 +26,12 @@ impl Environment {
         if self.map.contains_key(&key) {
             let v = self.map.get(&key).unwrap().clone();
             Ok(v)
-        }
-        else {
+        } else {
             if let Some(enclosing) = &self.enclosing {
-                return enclosing.get(token)
+                return enclosing.borrow().get(token);
             }
             Err(RuntimeError::undefined_variable(key.clone()))
         }
-
     }
 
     pub fn set(&mut self, key: &Token, value: Option<LiteralObject>) -> Result<(), RuntimeError> {
@@ -43,10 +44,10 @@ impl Environment {
             Entry::Occupied(mut entry) => {
                 entry.insert(Some(value));
                 Ok(())
-            },
+            }
             Entry::Vacant(_) => {
-                if let Some(enclosing) = &mut self.enclosing{
-                        return enclosing.assign(key, value)
+                if let Some(enclosing) = &mut self.enclosing {
+                    return enclosing.borrow_mut().assign(key, value);
                 }
                 Err(RuntimeError::undefined_variable(key.lexeme().clone()))
             }

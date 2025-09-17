@@ -1,6 +1,5 @@
-use std::fmt::{Display, Formatter};
 use crate::token::Token;
-
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -9,15 +8,14 @@ pub enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
     Grouping(Box<Expr>),
     Assignment(Token, Box<Expr>),
-    Var(Token)
+    Var(Token),
+    Logical(Box<Expr>, Token, Box<Expr>),
 }
 
-
-
 #[derive(Debug, Clone)]
-pub enum VarDecl{
+pub enum VarDecl {
     Name(Token),
-    Expr(Box<Expr>)
+    Expr(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -25,8 +23,9 @@ pub enum Stmt {
     ExprStmt(Box<Expr>),
     PrintStmt(Box<Expr>),
     VarDeclaration(Token, Option<Box<Expr>>),
-    Block(Vec<Box<Stmt>>)
-
+    Block(Vec<Box<Stmt>>),
+    If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
+    While(Box<Expr>, Box<Stmt>),
 }
 
 #[derive(Debug, Clone)]
@@ -42,18 +41,17 @@ impl Display for LiteralObject {
         let display = match self {
             LiteralObject::Number(num) => {
                 let x = num.to_string();
-                if x.ends_with(".0"){
+                if x.ends_with(".0") {
                     x.strip_suffix(".0").unwrap().to_string()
-                }
-                else{
+                } else {
                     x
                 }
             }
             LiteralObject::Nil => "nil".to_string(),
             LiteralObject::Str(val) => val.clone(),
-            LiteralObject::Bool(b) => b.to_string()
+            LiteralObject::Bool(b) => b.to_string(),
         };
 
-        write!(f, "{}", display )
+        write!(f, "{}", display)
     }
 }
