@@ -26,13 +26,11 @@ pub(crate) enum TokenKind {
     LESSEQUAL,
 
     // Literals
-
     IDENTIFIER,
     STRING,
     NUMBER,
 
     // Keywords
-
     AND,
     CLASS,
     ELSE,
@@ -49,21 +47,30 @@ pub(crate) enum TokenKind {
     TRUE,
     VAR,
     WHILE,
-    EOF
+    EOF,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Token{
+pub(crate) struct Token {
     token_type: TokenKind,
     lexeme: String,
     literal: Option<LiteralObject>,
-    line: usize
-
+    line: usize,
 }
 
-impl Token{
-    pub fn new(token_type: TokenKind, lexeme: String, literal: Option<LiteralObject>, line: usize) -> Self {
-        Self{ token_type, lexeme, literal, line}
+impl Token {
+    pub fn new(
+        token_type: TokenKind,
+        lexeme: String,
+        literal: Option<LiteralObject>,
+        line: usize,
+    ) -> Self {
+        Self {
+            token_type,
+            lexeme,
+            literal,
+            line,
+        }
     }
 
     pub fn token_type(&self) -> &TokenKind {
@@ -81,5 +88,4 @@ impl Token{
     pub fn line(&self) -> usize {
         self.line
     }
-
 }

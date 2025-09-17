@@ -1,33 +1,36 @@
-mod lexer;
-mod error;
 mod ast;
-mod parser;
-mod interpreter;
 mod environment;
+mod error;
+mod interpreter;
+mod lexer;
+mod parser;
 mod token;
 
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::io;
-use std::io::{BufRead, Write};
-use std::process::exit;
+use crate::interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
-use crate::interpreter::Interpreter;
-
+use std::env;
+use std::fs;
+use std::io;
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
+use std::process::exit;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Default)]
 pub struct Lox {
     had_error: bool,
     had_runtime_error: bool,
-    interpreter: Interpreter
+    interpreter: Interpreter,
 }
 
 impl Lox {
-    fn new() -> Self{
-        Self { had_error: false, had_runtime_error: false, interpreter: Interpreter::new() }
+    fn new() -> Self {
+        Self {
+            had_error: false,
+            had_runtime_error: false,
+            interpreter: Interpreter::new(),
+        }
     }
 
     fn main(&mut self, args: Vec<String>) {
@@ -40,7 +43,7 @@ impl Lox {
         }
     }
 
-    fn run<S: Into<String>>(&mut self, source: S){
+    fn run<S: Into<String>>(&mut self, source: S) {
         let mut scanner = Lexer::new(source.into());
         scanner.scan_tokens();
         // println!("tokens: {:?}", scanner.tokens());
@@ -51,30 +54,27 @@ impl Lox {
         let tree = parser.parse();
         // println!("tree:\n\n {tree:?}");
         let _ = self.interpreter.interpret(tree.unwrap());
-
-
     }
 
     fn run_file(&mut self, str_path: &str) -> io::Result<()> {
         let bytes = fs::read_to_string(PathBuf::from_str(str_path).expect("invalid path"))?;
         self.run(bytes);
-        if self.had_error{
+        if self.had_error {
             exit(65);
         }
-        if self.had_runtime_error{
+        if self.had_runtime_error {
             exit(70);
         }
         Ok(())
     }
 
-    fn run_prompt(&mut self) -> io::Result<()>{
+    fn run_prompt(&mut self) -> io::Result<()> {
         let stdin = io::stdin();
         let mut stdin_lock = stdin.lock();
         let stdout = io::stdout();
         let mut stdout_lock = stdout.lock();
 
-
-        loop{
+        loop {
             stdout_lock.write_all(b">")?;
             stdout_lock.flush()?;
 
@@ -88,14 +88,13 @@ impl Lox {
             let line = input.trim_end();
             self.run(line);
             self.had_error = false;
-
         }
         Ok(())
     }
 }
 
 fn main() {
-    let args : Vec<String> = env::args().skip(1).collect();
+    let args: Vec<String> = env::args().skip(1).collect();
     let mut lox = Lox::new();
     lox.main(args)
 }

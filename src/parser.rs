@@ -1,29 +1,19 @@
-use thiserror::Error;
+use crate::ast::Expr::Literal;
 use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
-use crate::ast::Expr::Literal;
 use crate::token::{Token, TokenKind};
+use thiserror::Error;
 
 const ERROR_PREFIX: &'static str = "Syntax Error: ";
 
-
 #[derive(Debug, Clone, Error)]
-pub enum ParseError{
+pub enum ParseError {
     #[error("{ERROR_PREFIX} Expected {symbol} at {line}.")]
-    MissingTrailingSymbol{
-        symbol: String,
-        line: usize
-    },
+    MissingTrailingSymbol { symbol: String, line: usize },
     #[error("{ERROR_PREFIX} Invalid assignment target `{expr}` on line {line} ")]
-    InvalidAssignment{
-        expr: String,
-        line: usize
-    },
+    InvalidAssignment { expr: String, line: usize },
     #[error("{ERROR_PREFIX} Unsupported primary {token} on line {line} ")]
-    UnsupportedPrimary{
-        token: String,
-        line: usize
-    }
+    UnsupportedPrimary { token: String, line: usize },
 }
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -31,13 +21,12 @@ type Result<T> = std::result::Result<T, ParseError>;
 #[derive(Debug, Clone)]
 pub struct Parser {
     tokens: Vec<Token>,
-    current: usize
+    current: usize,
 }
 
-
-impl Parser{
+impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self {tokens, current: 0}
+        Self { tokens, current: 0 }
     }
 
     fn peek(&self) -> &Token {
@@ -52,10 +41,10 @@ impl Parser{
         self.peek().token_type().clone() == TokenKind::EOF
     }
 
-    fn advance(& mut self) -> Token {
+    fn advance(&mut self) -> Token {
         if !self.is_at_end() {
             self.current += 1;
-            return self.tokens[self.current - 1].clone()
+            return self.tokens[self.current - 1].clone();
         }
         self.tokens[self.current].clone()
     }
@@ -65,7 +54,7 @@ impl Parser{
     }
 
     fn check(&self, token_type: TokenKind) -> bool {
-        if self.is_at_end(){
+        if self.is_at_end() {
             return false;
         }
         *self.peek().token_type() == token_type
@@ -84,12 +73,14 @@ impl Parser{
 
     fn consume(&mut self, token_type: TokenKind, symbol: &str) -> Result<Token> {
         if self.check(token_type) {
-            return Ok(self.advance())
+            return Ok(self.advance());
         }
         let token = self.peek();
-        Err(ParseError::MissingTrailingSymbol {symbol: symbol.to_string(), line: token.line()})
+        Err(ParseError::MissingTrailingSymbol {
+            symbol: symbol.to_string(),
+            line: token.line(),
+        })
     }
-
 
     pub fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements: Vec<Stmt> = Vec::new();
@@ -98,20 +89,16 @@ impl Parser{
             let stmt = self.declaration();
             if let Ok(stmt) = stmt {
                 statements.push(stmt)
-            }
-            else {
+            } else {
                 self.synchronize()
             }
-
         }
         Ok(statements)
     }
 
-
-
     fn declaration(&mut self) -> Result<Stmt> {
         if self.matches(&[TokenKind::VAR]) {
-            return self.var_declaration()
+            return self.var_declaration();
         }
         self.statement()
     }
@@ -125,16 +112,27 @@ impl Parser{
         }
         self.consume(TokenKind::SEMICOLON, ";")?;
         Ok(Stmt::VarDeclaration(name, initializer.map(Box::new)))
-
     }
 
     fn statement(&mut self) -> Result<Stmt> {
         if self.matches(&[TokenKind::PRINT]) {
-            return self.print_statement()
+            return self.print_statement();
         }
 
         if self.matches(&[TokenKind::LEFTBRACE]) {
-            return self.block()
+            return self.block();
+        }
+
+        if self.matches(&[TokenKind::IF]) {
+            return self.if_statement();
+        }
+
+        if self.matches(&[TokenKind::WHILE]) {
+            return self.while_statement();
+        }
+
+        if self.matches(&[TokenKind::FOR]) {
+            return self.for_statement();
         }
         self.expr_statement()
     }
@@ -164,44 +162,142 @@ impl Parser{
         Ok(Stmt::Block(statements))
     }
 
+    fn if_statement(&mut self) -> Result<Stmt> {
+        self.consume(TokenKind::LEFTPAREN, "(")?;
+        let condition = self.expression()?;
+        self.consume(TokenKind::RIGHTPAREN, ")")?;
+
+        let then_branch = self.block()?;
+        let mut else_branch: Option<Stmt> = None;
+
+        if self.matches(&[TokenKind::ELSE]) {
+            else_branch = Some(self.block()?);
+        }
+
+        Ok(Stmt::If(
+            Box::new(condition),
+            Box::new(then_branch),
+            else_branch.map(Box::new),
+        ))
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt> {
+        self.consume(TokenKind::LEFTPAREN, "(")?;
+        let condition = self.expression()?;
+        self.consume(TokenKind::RIGHTPAREN, ")")?;
+
+        let body = self.statement()?;
+        Ok(Stmt::While(Box::new(condition), Box::new(body)))
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt> {
+        self.consume(TokenKind::LEFTPAREN, "( after for")?;
+
+        let initializer = if self.matches(&[TokenKind::SEMICOLON]) {
+            None
+        } else if self.matches(&[TokenKind::VAR]) {
+            Some(self.var_declaration()?)
+        } else {
+            Some(self.expr_statement()?)
+        };
+
+        let mut condition: Option<Expr> = None;
+        if !self.check(TokenKind::SEMICOLON) {
+            condition = Some(self.expression()?);
+        }
+        self.consume(TokenKind::SEMICOLON, "; after loop condition")?;
+
+        let mut increment: Option<Expr> = None;
+        if !self.check(TokenKind::RIGHTPAREN) {
+            increment = Some(self.expression()?);
+        }
+        self.consume(TokenKind::RIGHTPAREN, ") after for clauses.")?;
+        let mut body = self.statement()?;
+
+        if let Some(increment) = increment {
+            body = Stmt::Block(Vec::from([
+                Box::new(body),
+                Box::new(Stmt::ExprStmt(Box::new(increment))),
+            ]));
+        }
+
+        body = Stmt::While(
+            Box::new(condition.unwrap_or(Expr::Literal(LiteralObject::Bool(true)))),
+            Box::new(body),
+        );
+
+        if let Some(initializer) = initializer {
+            body = Stmt::Block(Vec::from([Box::new(initializer), Box::new(body)]));
+        }
+
+        Ok(body)
+    }
+
     fn expression(&mut self) -> Result<Expr> {
         self.assignment()
     }
 
     fn assignment(&mut self) -> Result<Expr> {
-        let expr = self.equality()?;
+        let expr = self.or()?;
 
         if self.matches(&[TokenKind::EQUAL]) {
             let assignment = self.assignment()?;
             return match expr {
-                Expr::Var(v) => {
-                    Ok(Expr::Assignment(v.clone(), Box::new(assignment)))
-                }
+                Expr::Var(v) => Ok(Expr::Assignment(v.clone(), Box::new(assignment))),
                 _ => {
                     let equals = self.previous();
-                    Err(ParseError::InvalidAssignment { expr: equals.lexeme().clone(), line: equals.line() })
+                    Err(ParseError::InvalidAssignment {
+                        expr: equals.lexeme().clone(),
+                        line: equals.line(),
+                    })
                 }
-            }
+            };
         }
         Ok(expr)
+    }
 
+    fn or(&mut self) -> Result<Expr> {
+        let mut expr = self.and()?;
+
+        while self.matches(&[TokenKind::OR]) {
+            let op = self.previous().clone();
+            let rhs = self.and()?;
+            expr = Expr::Logical(Box::new(expr), op, Box::new(rhs));
+        }
+        Ok(expr)
+    }
+
+    fn and(&mut self) -> Result<Expr> {
+        let mut expr = self.equality()?;
+
+        while self.matches(&[TokenKind::AND]) {
+            let op = self.previous().clone();
+            let rhs = self.equality()?;
+            expr = Expr::Logical(Box::new(expr), op.clone(), Box::new(rhs))
+        }
+
+        Ok(expr)
     }
 
     fn equality(&mut self) -> Result<Expr> {
         let mut left = self.comparison()?;
 
-        while self.matches(&[TokenKind::EQUALEQUAL , TokenKind::BANGEQUAL]) {
+        while self.matches(&[TokenKind::EQUALEQUAL, TokenKind::BANGEQUAL]) {
             let op = self.previous().clone();
             let right = self.comparison()?;
-            left =  Expr::Binary(Box::new(left),op ,Box::new(right));
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
         Ok(left)
     }
 
-
     fn comparison(&mut self) -> Result<Expr> {
         let mut lhs = self.term()?;
-        while self.matches(&[TokenKind::GREATEREQUAL, TokenKind::GREATER, TokenKind::LESS, TokenKind::LESSEQUAL]) {
+        while self.matches(&[
+            TokenKind::GREATEREQUAL,
+            TokenKind::GREATER,
+            TokenKind::LESS,
+            TokenKind::LESSEQUAL,
+        ]) {
             let op = self.previous().clone();
             let rhs = self.term()?;
             lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs));
@@ -210,8 +306,8 @@ impl Parser{
     }
 
     fn term(&mut self) -> Result<Expr> {
-      let mut lhs = self.factor()?;
-        while self.matches(&[TokenKind::PLUS , TokenKind::MINUS]) {
+        let mut lhs = self.factor()?;
+        while self.matches(&[TokenKind::PLUS, TokenKind::MINUS]) {
             let op = self.previous().clone();
             let rhs = self.factor()?;
             lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs));
@@ -222,7 +318,7 @@ impl Parser{
     fn factor(&mut self) -> Result<Expr> {
         let mut lhs = self.unary()?;
 
-        while self.matches( &[TokenKind::SLASH , TokenKind::STAR]) {
+        while self.matches(&[TokenKind::SLASH, TokenKind::STAR]) {
             let op = self.previous().clone();
             let rhs = self.unary()?;
             lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs))
@@ -231,14 +327,13 @@ impl Parser{
     }
 
     fn unary(&mut self) -> Result<Expr> {
-        if self.matches(&[TokenKind::BANG , TokenKind::MINUS]) {
+        if self.matches(&[TokenKind::BANG, TokenKind::MINUS]) {
             let op = self.previous().clone();
             let rhs = self.unary()?;
             return Ok(Expr::Unary(op, Box::new(rhs)));
         }
         self.primary()
     }
-
 
     fn primary(&mut self) -> Result<Expr> {
         if self.matches(&[TokenKind::FALSE]) {
@@ -251,7 +346,11 @@ impl Parser{
             return Ok(Literal(LiteralObject::Nil));
         }
         if self.matches(&[TokenKind::NUMBER, TokenKind::STRING]) {
-            let val = self.previous().literal().clone().expect("num/string literal missing");
+            let val = self
+                .previous()
+                .literal()
+                .clone()
+                .expect("num/string literal missing");
             return Ok(Literal(val));
         }
         if self.matches(&[TokenKind::LEFTPAREN]) {
@@ -267,19 +366,29 @@ impl Parser{
 
         // If nothing matched:
         let tok = self.peek().clone();
-        Err(ParseError::UnsupportedPrimary { token: tok.lexeme().clone(), line: tok.line() })
+        Err(ParseError::UnsupportedPrimary {
+            token: tok.lexeme().clone(),
+            line: tok.line(),
+        })
     }
-
-
 
     fn synchronize(&mut self) {
         while !self.is_at_end() {
-            if self.matches(&[TokenKind::SEMICOLON , TokenKind::CLASS , TokenKind::FN , TokenKind::VAR , TokenKind::FOR , TokenKind::IF , TokenKind::WHILE , TokenKind::PRINT , TokenKind::RETURN]) {
-                return
+            if self.matches(&[
+                TokenKind::SEMICOLON,
+                TokenKind::CLASS,
+                TokenKind::FN,
+                TokenKind::VAR,
+                TokenKind::FOR,
+                TokenKind::IF,
+                TokenKind::WHILE,
+                TokenKind::PRINT,
+                TokenKind::RETURN,
+            ]) {
+                return;
             }
             self.advance();
         }
-        return
+        return;
     }
-
 }
