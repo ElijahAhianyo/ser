@@ -5,6 +5,9 @@ mod interpreter;
 mod lexer;
 mod parser;
 mod token;
+mod callable;
+mod function;
+mod builtins;
 
 use crate::interpreter::Interpreter;
 use lexer::Lexer;

@@ -3,8 +3,12 @@ use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
 use crate::token::{Token, TokenKind};
 use thiserror::Error;
+use crate::function::FnKind;
+use crate::interpreter::RuntimeError;
+use crate::token::TokenKind::LEFTBRACE;
 
 const ERROR_PREFIX: &'static str = "Syntax Error: ";
+const FN_ARGS_MAX: u32 = 255;
 
 #[derive(Debug, Clone, Error)]
 pub enum ParseError {
@@ -14,6 +18,13 @@ pub enum ParseError {
     InvalidAssignment { expr: String, line: usize },
     #[error("{ERROR_PREFIX} Unsupported primary {token} on line {line} ")]
     UnsupportedPrimary { token: String, line: usize },
+    #[error("{ERROR_PREFIX} Cannot have more than {FN_ARGS_MAX} args")]
+    MaxFunctionArgsLimitExceeded {
+        arg_name: String
+    },
+    #[error("{ERROR_PREFIX} {message}")]
+    Custom { message: String },
+
 }
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -100,6 +111,10 @@ impl Parser {
         if self.matches(&[TokenKind::VAR]) {
             return self.var_declaration();
         }
+
+        if self.matches(&[TokenKind::FN]) {
+            return self.function(FnKind::Named);
+        }
         self.statement()
     }
 
@@ -112,6 +127,46 @@ impl Parser {
         }
         self.consume(TokenKind::SEMICOLON, ";")?;
         Ok(Stmt::VarDeclaration(name, initializer.map(Box::new)))
+    }
+
+    fn function(&mut self, kind: FnKind) -> Result<Stmt> {
+        // fn keyword has already been consumed.
+        let token_name = self.consume(TokenKind::IDENTIFIER, format!("Expect {kind} name").as_str())?;
+
+        self.consume(TokenKind::LEFTPAREN, format!("Expect '(' after {kind} name").as_str())?;
+
+        let mut params: Vec<Token> = Vec::new();
+
+        if !self.check(TokenKind::RIGHTPAREN) {
+            loop {
+                if params.len() >= FN_ARGS_MAX as usize {
+                    return Err(ParseError::MaxFunctionArgsLimitExceeded{ arg_name: format!("{:?}",self.peek() )})
+                }
+
+                params.push(
+                    self.consume(TokenKind::IDENTIFIER, "Expect parameter name")?
+                );
+
+                if !self.matches(&[TokenKind::COMMA]) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenKind::RIGHTPAREN, "Expect ')' after parameter")?;
+
+        // consume function block
+        self.consume(LEFTBRACE, format!("Expect '{}' before {kind} body", "{").as_str())?;
+
+        let block = self.block()?;
+        let body = match block {
+            Stmt::Block(blk) => blk,
+            _ => ParseError::Custom {message: "Expected a block here".to_string()}.into()
+        };
+        Ok(Stmt::Fn(token_name, params, body))
+
+
+
     }
 
     fn statement(&mut self) -> Result<Stmt> {
@@ -153,9 +208,9 @@ impl Parser {
     fn block(&mut self) -> Result<Stmt> {
         // assume LEFTBRACE already consumed by caller
 
-        let mut statements: Vec<Box<Stmt>> = Vec::new();
+        let mut statements: Vec<Stmt> = Vec::new();
         while !self.check(TokenKind::RIGHTBRACE) && !self.is_at_end() {
-            statements.push(Box::new(self.declaration()?));
+            statements.push(self.declaration()?);
         }
         // consume right brace
         self.consume(TokenKind::RIGHTBRACE, "}")?;
@@ -216,8 +271,8 @@ impl Parser {
 
         if let Some(increment) = increment {
             body = Stmt::Block(Vec::from([
-                Box::new(body),
-                Box::new(Stmt::ExprStmt(Box::new(increment))),
+                body,
+                Stmt::ExprStmt(Box::new(increment)),
             ]));
         }
 
@@ -227,7 +282,7 @@ impl Parser {
         );
 
         if let Some(initializer) = initializer {
-            body = Stmt::Block(Vec::from([Box::new(initializer), Box::new(body)]));
+            body = Stmt::Block(Vec::from([initializer, body]));
         }
 
         Ok(body)
@@ -332,7 +387,43 @@ impl Parser {
             let rhs = self.unary()?;
             return Ok(Expr::Unary(op, Box::new(rhs)));
         }
-        self.primary()
+        self.call()
+    }
+
+    fn call(&mut self) -> Result<Expr> {
+        let mut expr = self.primary()?;
+
+        loop {
+            if self.matches(&[TokenKind::LEFTPAREN]) {
+                expr = self.finish_call(&expr)?;
+            }
+            else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn finish_call(&mut self, callee: &Expr) -> Result<Expr> {
+        let mut args: Vec<Expr> = Vec::new();
+        if !self.check(TokenKind::RIGHTPAREN) {
+            // we are expecting args.
+            loop {
+                if args.len() >= 255 {
+                    return Err(ParseError::MaxFunctionArgsLimitExceeded{ arg_name: format!("{:?}",self.peek() )})
+                }
+                args.push(self.expression()?);
+
+                if !self.matches(&[TokenKind::COMMA]) {
+                    break;
+                }
+            }
+        }
+
+        let parenthesis = self.consume(TokenKind::RIGHTPAREN, ") after arguments")?;
+
+        Ok(Expr::Call{ callee: Box::new(callee.clone()), paren: parenthesis, args })
     }
 
     fn primary(&mut self) -> Result<Expr> {

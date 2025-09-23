@@ -1,5 +1,7 @@
 use crate::token::Token;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
+use crate::callable::Callable;
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -10,6 +12,12 @@ pub enum Expr {
     Assignment(Token, Box<Expr>),
     Var(Token),
     Logical(Box<Expr>, Token, Box<Expr>),
+    Call {
+        callee: Box<Expr>,
+        paren: Token,
+        args: Vec<Expr >
+    },
+
 }
 
 #[derive(Debug, Clone)]
@@ -23,9 +31,11 @@ pub enum Stmt {
     ExprStmt(Box<Expr>),
     PrintStmt(Box<Expr>),
     VarDeclaration(Token, Option<Box<Expr>>),
-    Block(Vec<Box<Stmt>>),
+    Block(Vec<Stmt>),
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
+    // name, params, body
+    Fn(Token, Vec<Token>, Vec<Stmt>)
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +44,7 @@ pub(crate) enum LiteralObject {
     Str(String),
     Bool(bool),
     Nil,
+    Callable(Rc<dyn Callable>) // Rc here so the callable is thread-safe. cheap clones.
 }
 
 impl Display for LiteralObject {
@@ -50,6 +61,7 @@ impl Display for LiteralObject {
             LiteralObject::Nil => "nil".to_string(),
             LiteralObject::Str(val) => val.clone(),
             LiteralObject::Bool(b) => b.to_string(),
+            LiteralObject::Callable(c) => c.to_string()
         };
 
         write!(f, "{}", display)

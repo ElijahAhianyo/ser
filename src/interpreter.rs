@@ -1,11 +1,13 @@
 use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
-use crate::environment::Environment;
+use crate::environment::{EnvKey, Environment};
 use crate::token::{Token, TokenKind};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 use thiserror::Error;
+use crate::builtins::clock;
+use crate::function::UserDefinedFunction;
 
 const ERROR_PREFIX: &'static str = "Runtime Error: ";
 #[derive(Debug, Clone, Error)]
@@ -18,6 +20,20 @@ pub enum RuntimeError {
 
     #[error("{ERROR_PREFIX} {message}")]
     Custom { message: String },
+
+    #[error("{ERROR_PREFIX} could not find callee {name} on line {line}")]
+    InvalidCallee {
+        name: String,
+        line: usize
+    },
+
+    #[error("{ERROR_PREFIX} {name} takes in {param_len} params, got {args_len} on line {line}")]
+    InvalidArity{
+        name: String,
+        param_len: usize,
+        args_len: usize,
+        line: usize
+    }
 }
 
 impl RuntimeError {
@@ -34,20 +50,39 @@ impl RuntimeError {
             message: message.into(),
         }
     }
+
+    pub fn invalid_callee(name: String, line: usize) -> Self {
+        Self {name, line}
+    }
+
+    pub fn invalid_arity(name: String, param_len: usize, args_len: usize, line: usize) -> Self {
+        Self {name, param_len, args_len, line}
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Interpreter {
     env: Rc<RefCell<Environment>>,
+    globals: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self {
+        let mut this = Self {
             env: Rc::new(RefCell::new(Environment::new(None))),
-        }
+            globals: Rc::new(RefCell::new(Environment::new(None))),
+        };
+
+        this.load_globals().expect("could not set global variables");
+        this
     }
 
+    fn load_globals(&mut self) -> Result<&mut Self> {
+        let clk = LiteralObject::Callable(Rc::new(clock()));
+        self.globals.borrow_mut().set(EnvKey::String("clock"), Some(clk) )?;
+        Ok(self)
+
+    }
     pub fn interpret(&mut self, stmts: Vec<Stmt>) -> Result<()> {
         for stmt in &stmts {
             self.execute_statement(stmt)?
@@ -176,7 +211,7 @@ impl Interpreter {
 
             Expr::Assignment(lhs, rhs) => {
                 let value = self.evaluate(*rhs)?;
-                self.env.borrow_mut().assign(&lhs, value.clone()).unwrap(); // TODO: we cant use unwrap here
+                self.env.borrow_mut().assign(EnvKey::Token(&lhs), value.clone()).unwrap(); // TODO: we cant use unwrap here
                 Ok(value)
             }
 
@@ -193,10 +228,34 @@ impl Interpreter {
 
                 self.evaluate(*rhs)
             }
+
+            Expr::Call { callee, paren, args } => {
+                let callee = self.evaluate(*callee)?;
+
+                let callee = match callee {
+                    LiteralObject::Callable(callable) => callable,
+                    _ => RuntimeError::invalid_callee(callee.to_string(), paren.line()).into()?
+                };
+
+                if callee.arity() != args.len() {
+                    RuntimeError::invalid_arity(callee.name().unwrap_or("anonymous fn".to_string()), callee.arity(), args.len(), paren.line()).into()?
+                }
+
+                let mut arg_list: Vec<LiteralObject> = Vec::new();
+                for arg in args {
+                    arg_list.push(self.evaluate(*arg)?);
+                }
+
+                callee.call(&mut self, arg_list).into()
+
+
+
+            }
         }
     }
 
-    fn execute_statement(&mut self, stmt: &Stmt) -> Result<()> {
+
+    pub(crate) fn execute_statement(&mut self, stmt: &Stmt) -> Result<()> {
         match stmt {
             Stmt::ExprStmt(s) => {
                 self.evaluate(*s.clone())?;
@@ -212,7 +271,7 @@ impl Interpreter {
                     value = Some(self.evaluate(*expr.clone())?);
                 }
 
-                self.env.borrow_mut().set(&token, value)?;
+                self.env.borrow_mut().set(EnvKey::Token(&token), value)?;
             }
 
             Stmt::Block(block) => self.execute_block(
@@ -237,13 +296,20 @@ impl Interpreter {
 
                 self.execute_statement(&*body)?
             },
+
+            Stmt::Fn(name, params, body) => {
+                let func = UserDefinedFunction::new(Some(name.lexeme().to_string()), params.clone(), body.clone(), self.env.clone());
+                // whenever we define a fn(or come across a fn declaration stmt), we should save this in the environment so it can be looked up
+                let func_obj = LiteralObject::Callable(Rc::new(func));
+                self.env.borrow_mut().set(EnvKey::Token(name), Some(func_obj))?;
+            }
         }
         Ok(())
     }
 
-    fn execute_block(
+    pub(crate) fn execute_block(
         &mut self,
-        statements: Vec<Box<Stmt>>,
+        statements: Vec<Stmt>,
         environment: Rc<RefCell<Environment>>,
     ) -> Result<()> {
         let previous_env = std::mem::take(&mut self.env);
