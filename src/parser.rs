@@ -1,11 +1,11 @@
 use crate::ast::Expr::Literal;
 use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
-use crate::token::{Token, TokenKind};
-use thiserror::Error;
 use crate::function::FnKind;
 use crate::interpreter::RuntimeError;
 use crate::token::TokenKind::LEFTBRACE;
+use crate::token::{Token, TokenKind};
+use thiserror::Error;
 
 const ERROR_PREFIX: &'static str = "Syntax Error: ";
 const FN_ARGS_MAX: u32 = 255;
@@ -19,12 +19,9 @@ pub enum ParseError {
     #[error("{ERROR_PREFIX} Unsupported primary {token} on line {line} ")]
     UnsupportedPrimary { token: String, line: usize },
     #[error("{ERROR_PREFIX} Cannot have more than {FN_ARGS_MAX} args")]
-    MaxFunctionArgsLimitExceeded {
-        arg_name: String
-    },
+    MaxFunctionArgsLimitExceeded { arg_name: String },
     #[error("{ERROR_PREFIX} {message}")]
     Custom { message: String },
-
 }
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -44,8 +41,11 @@ impl Parser {
         &self.tokens[self.current]
     }
 
-    fn peek_next(&self) -> &Token {
-        &self.tokens[self.current + 1]
+    fn peek_next(&self) -> Option<&Token> {
+        if self.current + 1 >= self.tokens.len() {
+            return None;
+        }
+        Some(&self.tokens[self.current + 1])
     }
 
     fn is_at_end(&self) -> bool {
@@ -93,6 +93,25 @@ impl Parser {
         })
     }
 
+    /// This makes the semicolon optional if followed by a right brace.
+    /// If a semicolon is present, we consume it and move forward. If not,
+    /// we check if a brace follows(indicating end of block),
+    /// if not we return an error if `require` is true.
+    fn consume_optional_semicolon(&mut self, require: bool) -> Result<()> {
+        if self.check(TokenKind::SEMICOLON) {
+            self.advance();
+            Ok(())
+        } else if !require || self.check(TokenKind::RIGHTBRACE) || self.is_at_end() {
+            Ok(())
+        } else {
+            let token = self.peek();
+            Err(ParseError::MissingTrailingSymbol {
+                symbol: ";".to_string(),
+                line: token.line(),
+            })
+        }
+    }
+
     pub fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements: Vec<Stmt> = Vec::new();
 
@@ -125,27 +144,34 @@ impl Parser {
         if self.matches(&[TokenKind::EQUAL]) {
             initializer = Some(self.expression()?);
         }
-        self.consume(TokenKind::SEMICOLON, ";")?;
+        // make semicolon optional if followed by right brace (for block var decls)
+        self.consume_optional_semicolon(true)?;
+
         Ok(Stmt::VarDeclaration(name, initializer.map(Box::new)))
     }
 
     fn function(&mut self, kind: FnKind) -> Result<Stmt> {
         // fn keyword has already been consumed.
-        let token_name = self.consume(TokenKind::IDENTIFIER, format!("Expect {kind} name").as_str())?;
-
-        self.consume(TokenKind::LEFTPAREN, format!("Expect '(' after {kind} name").as_str())?;
+        let token_name = self.consume(
+            TokenKind::IDENTIFIER,
+            format!("Expect {kind:?} name").as_str(),
+        )?;
+        self.consume(
+            TokenKind::LEFTPAREN,
+            format!("Expect '(' after {kind:?} name").as_str(),
+        )?;
 
         let mut params: Vec<Token> = Vec::new();
 
         if !self.check(TokenKind::RIGHTPAREN) {
             loop {
                 if params.len() >= FN_ARGS_MAX as usize {
-                    return Err(ParseError::MaxFunctionArgsLimitExceeded{ arg_name: format!("{:?}",self.peek() )})
+                    return Err(ParseError::MaxFunctionArgsLimitExceeded {
+                        arg_name: format!("{:?}", self.peek()),
+                    });
                 }
 
-                params.push(
-                    self.consume(TokenKind::IDENTIFIER, "Expect parameter name")?
-                );
+                params.push(self.consume(TokenKind::IDENTIFIER, "Expect parameter name")?);
 
                 if !self.matches(&[TokenKind::COMMA]) {
                     break;
@@ -156,17 +182,21 @@ impl Parser {
         self.consume(TokenKind::RIGHTPAREN, "Expect ')' after parameter")?;
 
         // consume function block
-        self.consume(LEFTBRACE, format!("Expect '{}' before {kind} body", "{").as_str())?;
+        self.consume(
+            LEFTBRACE,
+            format!("Expect '{}' before {kind:?} body", "{").as_str(),
+        )?;
 
         let block = self.block()?;
         let body = match block {
             Stmt::Block(blk) => blk,
-            _ => ParseError::Custom {message: "Expected a block here".to_string()}.into()
+            _ => {
+                return Err(ParseError::Custom {
+                    message: "Expected a block here".to_string(),
+                });
+            }
         };
         Ok(Stmt::Fn(token_name, params, body))
-
-
-
     }
 
     fn statement(&mut self) -> Result<Stmt> {
@@ -189,19 +219,26 @@ impl Parser {
         if self.matches(&[TokenKind::FOR]) {
             return self.for_statement();
         }
+
+        if self.matches(&[TokenKind::RETURN]) {
+            return self.return_statement();
+        }
+
         self.expr_statement()
     }
 
     fn print_statement(&mut self) -> Result<Stmt> {
         // assumed `PRINT` already matched; if not, use matches above
         let expr = self.expression()?;
-        self.consume(TokenKind::SEMICOLON, ";")?;
+        // make semicolon optional if followed by right brace (for block var decls)
+        self.consume_optional_semicolon(true)?;
         Ok(Stmt::PrintStmt(Box::new(expr)))
     }
 
     fn expr_statement(&mut self) -> Result<Stmt> {
         let expr = self.expression()?;
-        self.consume(TokenKind::SEMICOLON, ";")?;
+        // make semicolon optional if followed by right brace (for block var decls)
+        self.consume_optional_semicolon(true)?;
         Ok(Stmt::ExprStmt(Box::new(expr)))
     }
 
@@ -210,7 +247,13 @@ impl Parser {
 
         let mut statements: Vec<Stmt> = Vec::new();
         while !self.check(TokenKind::RIGHTBRACE) && !self.is_at_end() {
-            statements.push(self.declaration()?);
+            match self.declaration() {
+                Ok(stmt) => statements.push(stmt),
+                Err(e) => {
+                    eprintln!("Error in block: {:?}", e);
+                    self.synchronize();
+                }
+            }
         }
         // consume right brace
         self.consume(TokenKind::RIGHTBRACE, "}")?;
@@ -221,12 +264,12 @@ impl Parser {
         self.consume(TokenKind::LEFTPAREN, "(")?;
         let condition = self.expression()?;
         self.consume(TokenKind::RIGHTPAREN, ")")?;
-
-        let then_branch = self.block()?;
+        // consume then branch left brace
+        let then_branch = self.statement()?;
         let mut else_branch: Option<Stmt> = None;
 
         if self.matches(&[TokenKind::ELSE]) {
-            else_branch = Some(self.block()?);
+            else_branch = Some(self.statement()?);
         }
 
         Ok(Stmt::If(
@@ -270,10 +313,7 @@ impl Parser {
         let mut body = self.statement()?;
 
         if let Some(increment) = increment {
-            body = Stmt::Block(Vec::from([
-                body,
-                Stmt::ExprStmt(Box::new(increment)),
-            ]));
+            body = Stmt::Block(Vec::from([body, Stmt::ExprStmt(Box::new(increment))]));
         }
 
         body = Stmt::While(
@@ -286,6 +326,21 @@ impl Parser {
         }
 
         Ok(body)
+    }
+
+    fn return_statement(&mut self) -> Result<Stmt> {
+        let keyword = self.previous().clone();
+        let value = if !self.check(TokenKind::SEMICOLON) {
+            let expr = self.expression()?;
+            Some(expr)
+        } else {
+            None
+        };
+
+        // make semicolon optional if followed by right brace (for block var decls)
+        self.consume_optional_semicolon(true)?;
+
+        Ok(Stmt::Return(keyword.clone(), value.map(Box::new)))
     }
 
     fn expression(&mut self) -> Result<Expr> {
@@ -396,8 +451,7 @@ impl Parser {
         loop {
             if self.matches(&[TokenKind::LEFTPAREN]) {
                 expr = self.finish_call(&expr)?;
-            }
-            else {
+            } else {
                 break;
             }
         }
@@ -411,7 +465,9 @@ impl Parser {
             // we are expecting args.
             loop {
                 if args.len() >= 255 {
-                    return Err(ParseError::MaxFunctionArgsLimitExceeded{ arg_name: format!("{:?}",self.peek() )})
+                    return Err(ParseError::MaxFunctionArgsLimitExceeded {
+                        arg_name: format!("{:?}", self.peek()),
+                    });
                 }
                 args.push(self.expression()?);
 
@@ -423,7 +479,11 @@ impl Parser {
 
         let parenthesis = self.consume(TokenKind::RIGHTPAREN, ") after arguments")?;
 
-        Ok(Expr::Call{ callee: Box::new(callee.clone()), paren: parenthesis, args })
+        Ok(Expr::Call {
+            callee: Box::new(callee.clone()),
+            paren: parenthesis,
+            args,
+        })
     }
 
     fn primary(&mut self) -> Result<Expr> {
@@ -464,22 +524,26 @@ impl Parser {
     }
 
     fn synchronize(&mut self) {
+        self.advance();
+
         while !self.is_at_end() {
-            if self.matches(&[
-                TokenKind::SEMICOLON,
-                TokenKind::CLASS,
-                TokenKind::FN,
-                TokenKind::VAR,
-                TokenKind::FOR,
-                TokenKind::IF,
-                TokenKind::WHILE,
-                TokenKind::PRINT,
-                TokenKind::RETURN,
-            ]) {
+            if *self.previous().token_type() == TokenKind::SEMICOLON {
                 return;
             }
+
+            if self.check(TokenKind::CLASS)
+                || self.check(TokenKind::FN)
+                || self.check(TokenKind::VAR)
+                || self.check(TokenKind::FOR)
+                || self.check(TokenKind::IF)
+                || self.check(TokenKind::WHILE)
+                || self.check(TokenKind::PRINT)
+                || self.check(TokenKind::RETURN)
+            {
+                return;
+            }
+
             self.advance();
         }
-        return;
     }
 }
