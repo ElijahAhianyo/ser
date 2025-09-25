@@ -1,6 +1,9 @@
 mod ast;
+mod builtins;
+mod callable;
 mod environment;
 mod error;
+mod function;
 mod interpreter;
 mod lexer;
 mod parser;
@@ -52,8 +55,12 @@ impl Lox {
         // }
         let mut parser = Parser::new(scanner.tokens().clone());
         let tree = parser.parse();
-        // println!("tree:\n\n {tree:?}");
-        let _ = self.interpreter.interpret(tree.unwrap());
+        self.interpreter
+            .interpret(tree.unwrap())
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                self.had_runtime_error = true;
+            });
     }
 
     fn run_file(&mut self, str_path: &str) -> io::Result<()> {

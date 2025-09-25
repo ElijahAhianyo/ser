@@ -2,6 +2,7 @@ use crate::ast::LiteralObject;
 use crate::interpreter::RuntimeError;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
 use crate::token::Token;
 use std::collections::hash_map::Entry;
@@ -34,23 +35,49 @@ impl Environment {
         }
     }
 
-    pub fn set(&mut self, key: &Token, value: Option<LiteralObject>) -> Result<(), RuntimeError> {
-        self.map.insert(key.lexeme().clone(), value);
+    pub fn set(&mut self, key: EnvKey, value: Option<LiteralObject>) -> Result<(), RuntimeError> {
+        let key = match key {
+            EnvKey::Token(token) => token.lexeme().clone(),
+            EnvKey::String(name) => name.to_string(),
+        };
+        self.map.insert(key, value);
         Ok(())
     }
 
-    pub fn assign(&mut self, key: &Token, value: LiteralObject) -> Result<(), RuntimeError> {
-        match self.map.entry(key.lexeme().clone()) {
+    pub fn assign(&mut self, key: EnvKey, value: LiteralObject) -> Result<(), RuntimeError> {
+        let key = match key {
+            EnvKey::Token(token) => token.lexeme().clone(),
+            EnvKey::String(name) => name.to_string(),
+        };
+
+        match self.map.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 entry.insert(Some(value));
                 Ok(())
             }
             Entry::Vacant(_) => {
                 if let Some(enclosing) = &mut self.enclosing {
-                    return enclosing.borrow_mut().assign(key, value);
+                    return enclosing
+                        .borrow_mut()
+                        .assign(EnvKey::String(key.as_str()), value);
                 }
-                Err(RuntimeError::undefined_variable(key.lexeme().clone()))
+                Err(RuntimeError::undefined_variable(key))
             }
         }
     }
+}
+
+impl Display for Environment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Environment<Map<{:?}> Enclosing<{:?}>>",
+            self.map, self.enclosing
+        )
+    }
+}
+
+pub enum EnvKey<'a> {
+    Token(&'a Token),
+    String(&'a str),
 }
