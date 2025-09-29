@@ -10,12 +10,15 @@ pub enum ResolverError {
     VariableNotInitialized(String),
     #[error("Variable '{0}' is already declared in this scope.")]
     VariableAlreadyDeclared(String),
+    #[error("Cannot return from top-level code at line {0}.")]
+    ReturnFromTopLevel(usize),
 }
 
 #[derive(Debug)]
 pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, bool>>,
     interpreter: &'a mut Interpreter,
+    fn_depth: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -23,6 +26,7 @@ impl<'a> Resolver<'a> {
         Self {
             scopes: Vec::new(),
             interpreter,
+            fn_depth: 0,
         }
     }
 
@@ -52,6 +56,10 @@ impl<'a> Resolver<'a> {
                 self.declare(ident)?;
                 self.define(ident);
 
+                // Enter function context
+                let enclosing_depth = self.fn_depth;
+                self.fn_depth += 1;
+
                 self.begin_scope();
                 for p in params {
                     self.declare(p)?;
@@ -59,6 +67,9 @@ impl<'a> Resolver<'a> {
                 }
                 self.resolve(body)?;
                 self.end_scope();
+
+                // Restore previous function context
+                self.fn_depth = enclosing_depth;
             }
 
             Stmt::ExprStmt(expr) => self.resolve_expr(expr)?,
@@ -77,7 +88,10 @@ impl<'a> Resolver<'a> {
             Stmt::PrintStmt(expr) => {
                 self.resolve_expr(&*expr)?;
             }
-            Stmt::Return(_, value) => {
+            Stmt::Return(keyword, value) => {
+                if self.fn_depth == 0 {
+                    return Err(ResolverError::ReturnFromTopLevel(keyword.line()));
+                }
                 if let Some(value) = value {
                     self.resolve_expr(&*value)?;
                 }
