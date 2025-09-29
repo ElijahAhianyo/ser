@@ -2,41 +2,64 @@ use crate::callable::Callable;
 use crate::token::Token;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use uuid::Timestamp;
+use uuid::{NoContext, Uuid, uuid};
+
+#[derive(Debug, Clone)]
+pub struct ExprNode {
+    expr: Expr,
+    id: String,
+}
+
+fn generate_uuid7() -> String {
+    let ts = Timestamp::now(NoContext);
+    let uuid = Uuid::new_v7(ts);
+    uuid.to_string()
+}
+
+impl ExprNode {
+    pub fn new(expr: Expr) -> Self {
+        let id = generate_uuid7();
+        Self { expr, id }
+    }
+
+    pub fn expr(&self) -> &Expr {
+        &self.expr
+    }
+
+    pub fn id(&self) -> &String {
+        &self.id
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Literal(LiteralObject),
-    Unary(Token, Box<Expr>),
-    Binary(Box<Expr>, Token, Box<Expr>),
-    Grouping(Box<Expr>),
-    Assignment(Token, Box<Expr>),
+    Unary(Token, Box<ExprNode>),
+    Binary(Box<ExprNode>, Token, Box<ExprNode>),
+    Grouping(Box<ExprNode>),
+    Assignment(Token, Box<ExprNode>),
     Var(Token),
-    Logical(Box<Expr>, Token, Box<Expr>),
+    Logical(Box<ExprNode>, Token, Box<ExprNode>),
     Call {
-        callee: Box<Expr>,
+        callee: Box<ExprNode>,
         paren: Token,
-        args: Vec<Expr>,
+        args: Vec<ExprNode>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub enum VarDecl {
-    Name(Token),
-    Expr(Box<Expr>),
-}
-
-#[derive(Debug, Clone)]
 pub enum Stmt {
-    ExprStmt(Box<Expr>),
-    PrintStmt(Box<Expr>),
-    VarDeclaration(Token, Option<Box<Expr>>),
+    ExprStmt(Box<ExprNode>),
+    PrintStmt(Box<ExprNode>),
+    VarDeclaration(Token, Option<Box<ExprNode>>),
     Block(Vec<Stmt>),
-    If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
-    While(Box<Expr>, Box<Stmt>),
+    If(Box<ExprNode>, Box<Stmt>, Option<Box<Stmt>>),
+    While(Box<ExprNode>, Box<Stmt>),
     // name, params, body
     Fn(Token, Vec<Token>, Vec<Stmt>),
     //keyword, value
-    Return(Token, Option<Box<Expr>>),
+    Return(Token, Option<Box<ExprNode>>),
 }
 
 #[derive(Clone)]
