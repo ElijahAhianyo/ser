@@ -96,7 +96,11 @@ impl Environment {
         Ok(())
     }
 
-    pub fn ancestor(&self, env: Rc<RefCell<Environment>>, distance: usize) -> Option<Rc<RefCell<Environment>>> {
+    pub fn ancestor(
+        &self,
+        env: Rc<RefCell<Environment>>,
+        distance: usize,
+    ) -> Option<Rc<RefCell<Environment>>> {
         let mut environment = Some(env);
         for _ in 0..distance {
             if let Some(env) = environment {

@@ -1,5 +1,5 @@
-use crate::ast::{ExprNode, LiteralObject};
 use crate::ast::{Expr, Stmt};
+use crate::ast::{ExprNode, LiteralObject};
 use crate::builtins::clock;
 use crate::environment::{EnvKey, Environment};
 use crate::function::UserDefinedFunction;
@@ -239,14 +239,12 @@ impl Interpreter {
                         EnvKey::Token(&lhs),
                         value.clone(),
                     )?
-
                 }
                 // fallback on globals
                 else {
-                    self.env.borrow_mut().assign(
-                        EnvKey::Token(&lhs),
-                        value.clone(),
-                    )?
+                    self.env
+                        .borrow_mut()
+                        .assign(EnvKey::Token(&lhs), value.clone())?
                 }
 
                 Ok(value)
@@ -418,7 +416,9 @@ impl Interpreter {
         expr_id: &String,
     ) -> Result<Option<LiteralObject>, RuntimeError> {
         if let Some(distance) = self.locals.get(expr_id) {
-            self.env.borrow().get_at(self.env.clone(), *distance, EnvKey::Token(name))
+            self.env
+                .borrow()
+                .get_at(self.env.clone(), *distance, EnvKey::Token(name))
         } else {
             // search the current environment which has globals as its ancestor(check how this is created in the constructor)
             self.env.borrow().get(EnvKey::Token(name))
