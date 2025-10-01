@@ -1,4 +1,4 @@
-use crate::ast::LiteralObject;
+use crate::ast::{ExprNode, LiteralObject};
 use crate::ast::{Expr, Stmt};
 use crate::builtins::clock;
 use crate::environment::{EnvKey, Environment};
@@ -111,12 +111,13 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate(&mut self, node: Expr) -> EvalResult {
-        match node {
+    pub fn evaluate(&mut self, node: ExprNode) -> EvalResult {
+        let expr_id = node.id();
+        match node.expr() {
             Expr::Literal(val) => Ok(val.clone()),
-            Expr::Grouping(expr_node) => Ok(self.evaluate(expr_node.expr().clone())?),
+            Expr::Grouping(expr_node) => Ok(self.evaluate(*expr_node.clone())?),
             Expr::Unary(op, expr_node) => {
-                let right = self.evaluate(expr_node.expr().clone())?;
+                let right = self.evaluate(*expr_node.clone())?;
 
                 match op.token_type() {
                     TokenKind::MINUS => match &right {
@@ -131,8 +132,8 @@ impl Interpreter {
                 }
             }
             Expr::Binary(left, op, right) => {
-                let left = self.evaluate(left.expr().clone())?;
-                let right = self.evaluate(right.expr().clone())?;
+                let left = self.evaluate(*left.clone())?;
+                let right = self.evaluate(*right.clone())?;
 
                 match op.token_type() {
                     TokenKind::MINUS => match (&left, &right) {
@@ -220,7 +221,7 @@ impl Interpreter {
                 }
             }
 
-            Expr::Var(v) => match self.env.borrow().get(EnvKey::Token(&v))? {
+            Expr::Var(v) => match self.lookup_variable(v, expr_id)? {
                 Some(val) => Ok(val),
                 None => Err(RuntimeError::custom(format!(
                     "variable '{}' is uninitialized",
@@ -230,10 +231,19 @@ impl Interpreter {
             },
 
             Expr::Assignment(lhs, rhs) => {
-                let value = self.evaluate(rhs.expr().clone())?;
+                let value = self.evaluate(*rhs.clone())?;
                 if let Some(distance) = self.locals.get(rhs.id()) {
                     self.env.borrow_mut().assign_at(
+                        self.env.clone(),
                         *distance,
+                        EnvKey::Token(&lhs),
+                        value.clone(),
+                    )?
+
+                }
+                // fallback on globals
+                else {
+                    self.env.borrow_mut().assign(
                         EnvKey::Token(&lhs),
                         value.clone(),
                     )?
@@ -243,7 +253,7 @@ impl Interpreter {
             }
 
             Expr::Logical(lhs, op, rhs) => {
-                let lhs = self.evaluate(lhs.expr().clone())?;
+                let lhs = self.evaluate(*lhs.clone())?;
 
                 if *op.token_type() == TokenKind::OR {
                     if self.is_truthy(&lhs.clone()) {
@@ -253,7 +263,7 @@ impl Interpreter {
                     return Ok(lhs);
                 };
 
-                self.evaluate(rhs.expr().clone())
+                self.evaluate(*rhs.clone())
             }
 
             Expr::Call {
@@ -261,7 +271,7 @@ impl Interpreter {
                 paren,
                 args,
             } => {
-                let callee = self.evaluate(callee.expr().clone())?;
+                let callee = self.evaluate(*callee.clone())?;
 
                 let callee = match callee {
                     LiteralObject::Callable(callable) => callable,
@@ -285,7 +295,7 @@ impl Interpreter {
 
                 let mut arg_list: Vec<LiteralObject> = Vec::new();
                 for arg in args {
-                    arg_list.push(self.evaluate(arg.expr().clone())?);
+                    arg_list.push(self.evaluate(arg.clone())?);
                 }
 
                 callee.call(self, arg_list).into()
@@ -296,11 +306,11 @@ impl Interpreter {
     pub(crate) fn execute_statement(&mut self, stmt: &Stmt) -> ExecResult {
         match stmt {
             Stmt::ExprStmt(s) => {
-                self.evaluate(s.expr().clone())?;
+                self.evaluate(*s.clone())?;
                 Ok(ExecFlow::Normal)
             }
             Stmt::PrintStmt(s) => {
-                let val = self.evaluate(s.expr().clone())?;
+                let val = self.evaluate(*s.clone())?;
                 println!("{}", val.to_string());
                 Ok(ExecFlow::Normal)
             }
@@ -308,7 +318,7 @@ impl Interpreter {
             Stmt::VarDeclaration(token, expr) => {
                 let mut value: Option<LiteralObject> = None;
                 if let Some(expr) = expr {
-                    value = Some(self.evaluate(expr.expr().clone())?);
+                    value = Some(self.evaluate(*expr.clone())?);
                 }
 
                 self.env.borrow_mut().set(EnvKey::Token(&token), value)?;
@@ -324,7 +334,7 @@ impl Interpreter {
             }
 
             Stmt::If(cond, then_block, else_block) => {
-                let cond_eval = self.evaluate(cond.expr().clone())?;
+                let cond_eval = self.evaluate(*cond.clone())?;
                 if self.is_truthy(&cond_eval) {
                     return Ok(self.execute_statement(&*then_block)?);
                 } else if let Some(else_block) = else_block {
@@ -335,7 +345,7 @@ impl Interpreter {
 
             Stmt::While(cond, body) => {
                 loop {
-                    let cond_val = self.evaluate((*cond).expr().clone())?;
+                    let cond_val = self.evaluate(*(*cond).clone())?;
                     if !self.is_truthy(&cond_val) {
                         break;
                     }
@@ -365,7 +375,7 @@ impl Interpreter {
 
             Stmt::Return(_, value) => {
                 let value = if let Some(expr_node) = value {
-                    self.evaluate(expr_node.expr().clone())?
+                    self.evaluate(*expr_node.clone())?
                 } else {
                     LiteralObject::Nil
                 };
@@ -380,7 +390,7 @@ impl Interpreter {
         environment: Rc<RefCell<Environment>>,
     ) -> ExecResult {
         let previous_env = std::mem::take(&mut self.env);
-        let _ = std::mem::replace(&mut self.env, environment);
+        let _ = std::mem::replace(&mut self.env, environment.clone());
 
         for stmt in &statements {
             let exec_stmt = self.execute_statement(&*stmt)?;
@@ -392,7 +402,6 @@ impl Interpreter {
                 _ => {}
             }
         }
-
         let _ = std::mem::replace(&mut self.env, previous_env);
         Ok(ExecFlow::Normal)
     }
@@ -409,9 +418,10 @@ impl Interpreter {
         expr_id: &String,
     ) -> Result<Option<LiteralObject>, RuntimeError> {
         if let Some(distance) = self.locals.get(expr_id) {
-            self.env.borrow().get_at(*distance, EnvKey::Token(name))
+            self.env.borrow().get_at(self.env.clone(), *distance, EnvKey::Token(name))
         } else {
-            self.globals.borrow().get(EnvKey::Token(name))
+            // search the current environment which has globals as its ancestor(check how this is created in the constructor)
+            self.env.borrow().get(EnvKey::Token(name))
         }
     }
 

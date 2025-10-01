@@ -75,7 +75,7 @@ impl<'a> Resolver<'a> {
             Stmt::ExprStmt(expr) => self.resolve_expr(expr)?,
 
             Stmt::If(cond, then, else_) => {
-                self.resolve_expr(&(cond))?;
+                self.resolve_expr(&cond)?;
                 self.resolve_statement(&*then)?;
                 if let Some(else_) = else_ {
                     self.resolve_statement(&*else_)?
@@ -144,7 +144,7 @@ impl<'a> Resolver<'a> {
             }
             Expr::Call {
                 callee,
-                paren,
+                paren: _paren,
                 args,
             } => {
                 self.resolve_expr(&*callee)?;
@@ -158,8 +158,9 @@ impl<'a> Resolver<'a> {
 
     fn resolve_local(&mut self, name: &str, expr: &ExprNode) -> Result<(), ResolverError> {
         for (i, scope) in self.scopes.iter().rev().enumerate() {
-            if let Some(exists) = scope.get(name) {
-                self.interpreter.record_resolution(expr.id().clone(), i)
+            if let Some(_) = scope.get(name) {
+                self.interpreter.record_resolution(expr.id().clone(), i);
+                return Ok(());
             }
         }
         Ok(())

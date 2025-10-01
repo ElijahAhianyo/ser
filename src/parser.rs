@@ -2,7 +2,6 @@ use crate::ast::Expr::Literal;
 use crate::ast::{Expr, Stmt};
 use crate::ast::{ExprNode, LiteralObject};
 use crate::function::FnKind;
-use crate::interpreter::RuntimeError;
 use crate::token::TokenKind::LEFTBRACE;
 use crate::token::{Token, TokenKind};
 use thiserror::Error;

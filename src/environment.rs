@@ -41,10 +41,11 @@ impl Environment {
 
     pub fn get_at(
         &self,
+        root_env: Rc<RefCell<Environment>>,
         distance: usize,
         name: EnvKey,
     ) -> Result<Option<LiteralObject>, RuntimeError> {
-        if let Some(ancestor) = self.ancestor(distance) {
+        if let Some(ancestor) = self.ancestor(root_env, distance) {
             return ancestor.borrow().get(name);
         }
         // TODO: since we can guarantee that this wont ever be true(since the resolver found it) we should not bubble the error up
@@ -84,19 +85,20 @@ impl Environment {
 
     pub fn assign_at(
         &mut self,
+        root_env: Rc<RefCell<Environment>>,
         distance: usize,
         key: EnvKey,
         value: LiteralObject,
     ) -> Result<(), RuntimeError> {
-        if let Some(ancestor) = self.ancestor(distance) {
+        if let Some(ancestor) = self.ancestor(root_env, distance) {
             return ancestor.borrow_mut().assign(key, value);
         }
         Ok(())
     }
 
-    pub fn ancestor(&self, distance: usize) -> Option<Rc<RefCell<Environment>>> {
-        let mut environment = self.enclosing.clone();
-        for _ in 1..distance {
+    pub fn ancestor(&self, env: Rc<RefCell<Environment>>, distance: usize) -> Option<Rc<RefCell<Environment>>> {
+        let mut environment = Some(env);
+        for _ in 0..distance {
             if let Some(env) = environment {
                 environment = env.borrow().enclosing.clone();
             } else {
