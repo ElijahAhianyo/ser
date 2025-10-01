@@ -3,7 +3,7 @@ use crate::token::Token;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use uuid::Timestamp;
-use uuid::{NoContext, Uuid, uuid};
+use uuid::{NoContext, Uuid};
 
 #[derive(Debug, Clone)]
 pub struct ExprNode {
