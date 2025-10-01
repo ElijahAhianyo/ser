@@ -48,8 +48,10 @@ impl Environment {
         if let Some(ancestor) = self.ancestor(root_env, distance) {
             return ancestor.borrow().get(name);
         }
-        // TODO: since we can guarantee that this wont ever be true(since the resolver found it) we should not bubble the error up
-        Ok(None)
+        // This branch should be unreachable if the resolver is correct.
+        panic!(
+            "Environment::get_at: unreachable code reached; resolver should guarantee variable exists at the given distance"
+        );
     }
 
     pub fn set(&mut self, key: EnvKey, value: Option<LiteralObject>) -> Result<(), RuntimeError> {
