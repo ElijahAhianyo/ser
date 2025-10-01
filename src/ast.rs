@@ -2,8 +2,11 @@ use crate::callable::Callable;
 use crate::token::Token;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Timestamp;
 use uuid::{NoContext, Uuid};
+
+static EXPR_NODE_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Debug, Clone)]
 pub struct ExprNode {
@@ -11,15 +14,11 @@ pub struct ExprNode {
     id: String,
 }
 
-fn generate_uuid7() -> String {
-    let ts = Timestamp::now(NoContext);
-    let uuid = Uuid::new_v7(ts);
-    uuid.to_string()
-}
-
 impl ExprNode {
     pub fn new(expr: Expr) -> Self {
-        let id = generate_uuid7();
+        let id = EXPR_NODE_ID_COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .to_string();
         Self { expr, id }
     }
 
