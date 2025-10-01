@@ -22,17 +22,36 @@ impl Environment {
         }
     }
 
-    pub fn get(&self, token: &Token) -> Result<Option<LiteralObject>, RuntimeError> {
-        let key = token.lexeme().clone();
-        if self.map.contains_key(&key) {
-            let v = self.map.get(&key).unwrap().clone();
+    pub fn get(&self, key: EnvKey) -> Result<Option<LiteralObject>, RuntimeError> {
+        let key_str = match key {
+            EnvKey::Token(token) => token.lexeme().clone(),
+            EnvKey::String(name) => name.to_string(),
+        };
+
+        if self.map.contains_key(&key_str) {
+            let v = self.map.get(&key_str).unwrap().clone();
             Ok(v)
         } else {
             if let Some(enclosing) = &self.enclosing {
-                return enclosing.borrow().get(token);
+                return enclosing.borrow().get(key);
             }
-            Err(RuntimeError::undefined_variable(key.clone()))
+            Err(RuntimeError::undefined_variable(key_str.clone()))
         }
+    }
+
+    pub fn get_at(
+        &self,
+        root_env: Rc<RefCell<Environment>>,
+        distance: usize,
+        name: EnvKey,
+    ) -> Result<Option<LiteralObject>, RuntimeError> {
+        if let Some(ancestor) = self.ancestor(root_env, distance) {
+            return ancestor.borrow().get(name);
+        }
+        // This branch should be unreachable if the resolver is correct.
+        panic!(
+            "Environment::get_at: unreachable code reached; resolver should guarantee variable exists at the given distance"
+        );
     }
 
     pub fn set(&mut self, key: EnvKey, value: Option<LiteralObject>) -> Result<(), RuntimeError> {
@@ -64,6 +83,35 @@ impl Environment {
                 Err(RuntimeError::undefined_variable(key))
             }
         }
+    }
+
+    pub fn assign_at(
+        &mut self,
+        root_env: Rc<RefCell<Environment>>,
+        distance: usize,
+        key: EnvKey,
+        value: LiteralObject,
+    ) -> Result<(), RuntimeError> {
+        if let Some(ancestor) = self.ancestor(root_env, distance) {
+            return ancestor.borrow_mut().assign(key, value);
+        }
+        Ok(())
+    }
+
+    pub fn ancestor(
+        &self,
+        env: Rc<RefCell<Environment>>,
+        distance: usize,
+    ) -> Option<Rc<RefCell<Environment>>> {
+        let mut environment = Some(env);
+        for _ in 0..distance {
+            if let Some(env) = environment {
+                environment = env.borrow().enclosing.clone();
+            } else {
+                return None;
+            }
+        }
+        environment
     }
 }
 

@@ -1,11 +1,12 @@
-use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
+use crate::ast::{ExprNode, LiteralObject};
 use crate::builtins::clock;
 use crate::environment::{EnvKey, Environment};
 use crate::function::UserDefinedFunction;
 use crate::token::{Token, TokenKind};
 use anyhow::Result;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -77,6 +78,7 @@ impl RuntimeError {
 pub struct Interpreter {
     env: Rc<RefCell<Environment>>,
     globals: Rc<RefCell<Environment>>,
+    locals: HashMap<String, usize>,
 }
 
 impl Interpreter {
@@ -84,7 +86,11 @@ impl Interpreter {
         let globals = Rc::new(RefCell::new(Environment::new(None)));
         let env = Rc::new(RefCell::new(Environment::new(Some(globals.clone()))));
 
-        let mut this = Self { env, globals };
+        let mut this = Self {
+            env,
+            globals,
+            locals: HashMap::new(),
+        };
 
         this.load_globals().expect("could not set global variables");
         this
@@ -105,12 +111,13 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate(&mut self, node: Expr) -> EvalResult {
-        match node {
+    pub fn evaluate(&mut self, node: ExprNode) -> EvalResult {
+        let expr_id = node.id();
+        match node.expr() {
             Expr::Literal(val) => Ok(val.clone()),
-            Expr::Grouping(expr) => Ok(self.evaluate(*expr.clone())?),
-            Expr::Unary(op, expr) => {
-                let right = self.evaluate(*expr)?;
+            Expr::Grouping(expr_node) => Ok(self.evaluate(*expr_node.clone())?),
+            Expr::Unary(op, expr_node) => {
+                let right = self.evaluate(*expr_node.clone())?;
 
                 match op.token_type() {
                     TokenKind::MINUS => match &right {
@@ -125,8 +132,8 @@ impl Interpreter {
                 }
             }
             Expr::Binary(left, op, right) => {
-                let left = self.evaluate(*left)?;
-                let right = self.evaluate(*right)?;
+                let left = self.evaluate(*left.clone())?;
+                let right = self.evaluate(*right.clone())?;
 
                 match op.token_type() {
                     TokenKind::MINUS => match (&left, &right) {
@@ -214,7 +221,7 @@ impl Interpreter {
                 }
             }
 
-            Expr::Var(v) => match self.env.borrow().get(&v)? {
+            Expr::Var(v) => match self.lookup_variable(v, expr_id)? {
                 Some(val) => Ok(val),
                 None => Err(RuntimeError::custom(format!(
                     "variable '{}' is uninitialized",
@@ -224,16 +231,27 @@ impl Interpreter {
             },
 
             Expr::Assignment(lhs, rhs) => {
-                let value = self.evaluate(*rhs)?;
-                self.env
-                    .borrow_mut()
-                    .assign(EnvKey::Token(&lhs), value.clone())
-                    .unwrap(); // TODO: we cant use unwrap here
+                let value = self.evaluate(*rhs.clone())?;
+                if let Some(distance) = self.locals.get(rhs.id()) {
+                    self.env.borrow_mut().assign_at(
+                        self.env.clone(),
+                        *distance,
+                        EnvKey::Token(&lhs),
+                        value.clone(),
+                    )?
+                }
+                // fallback on globals
+                else {
+                    self.env
+                        .borrow_mut()
+                        .assign(EnvKey::Token(&lhs), value.clone())?
+                }
+
                 Ok(value)
             }
 
             Expr::Logical(lhs, op, rhs) => {
-                let lhs = self.evaluate(*lhs)?;
+                let lhs = self.evaluate(*lhs.clone())?;
 
                 if *op.token_type() == TokenKind::OR {
                     if self.is_truthy(&lhs.clone()) {
@@ -243,7 +261,7 @@ impl Interpreter {
                     return Ok(lhs);
                 };
 
-                self.evaluate(*rhs)
+                self.evaluate(*rhs.clone())
             }
 
             Expr::Call {
@@ -251,7 +269,7 @@ impl Interpreter {
                 paren,
                 args,
             } => {
-                let callee = self.evaluate(*callee)?;
+                let callee = self.evaluate(*callee.clone())?;
 
                 let callee = match callee {
                     LiteralObject::Callable(callable) => callable,
@@ -275,7 +293,7 @@ impl Interpreter {
 
                 let mut arg_list: Vec<LiteralObject> = Vec::new();
                 for arg in args {
-                    arg_list.push(self.evaluate(arg)?);
+                    arg_list.push(self.evaluate(arg.clone())?);
                 }
 
                 callee.call(self, arg_list).into()
@@ -354,8 +372,8 @@ impl Interpreter {
             }
 
             Stmt::Return(_, value) => {
-                let value = if let Some(expr) = value {
-                    self.evaluate(*expr.clone())?
+                let value = if let Some(expr_node) = value {
+                    self.evaluate(*expr_node.clone())?
                 } else {
                     LiteralObject::Nil
                 };
@@ -370,7 +388,7 @@ impl Interpreter {
         environment: Rc<RefCell<Environment>>,
     ) -> ExecResult {
         let previous_env = std::mem::take(&mut self.env);
-        let _ = std::mem::replace(&mut self.env, environment);
+        let _ = std::mem::replace(&mut self.env, environment.clone());
 
         for stmt in &statements {
             let exec_stmt = self.execute_statement(&*stmt)?;
@@ -382,9 +400,29 @@ impl Interpreter {
                 _ => {}
             }
         }
-
         let _ = std::mem::replace(&mut self.env, previous_env);
         Ok(ExecFlow::Normal)
+    }
+
+    pub(crate) fn record_resolution(&mut self, expr_id: String, depth: usize) {
+        // Record the lexical distance (scope depth) for this expression id.
+        // If an entry already existed, we simply overwrite it.
+        self.locals.insert(expr_id, depth);
+    }
+
+    fn lookup_variable(
+        &self,
+        name: &Token,
+        expr_id: &String,
+    ) -> Result<Option<LiteralObject>, RuntimeError> {
+        if let Some(distance) = self.locals.get(expr_id) {
+            self.env
+                .borrow()
+                .get_at(self.env.clone(), *distance, EnvKey::Token(name))
+        } else {
+            // search the current environment which has globals as its ancestor(check how this is created in the constructor)
+            self.env.borrow().get(EnvKey::Token(name))
+        }
     }
 
     pub fn is_truthy(&self, object: &LiteralObject) -> bool {

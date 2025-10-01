@@ -7,9 +7,11 @@ mod function;
 mod interpreter;
 mod lexer;
 mod parser;
+mod resolver;
 mod token;
 
 use crate::interpreter::Interpreter;
+use crate::resolver::Resolver;
 use lexer::Lexer;
 use parser::Parser;
 use std::env;
@@ -54,13 +56,22 @@ impl Lox {
         //     println!("{token:?}");
         // }
         let mut parser = Parser::new(scanner.tokens().clone());
-        let tree = parser.parse();
-        self.interpreter
-            .interpret(tree.unwrap())
-            .unwrap_or_else(|e| {
-                eprintln!("{e}");
-                self.had_runtime_error = true;
-            });
+        let tree = parser.parse().unwrap_or_else(|e| {
+            eprintln!("{e}");
+            self.had_error = true;
+            vec![]
+        });
+
+        let mut resolver = Resolver::new(&mut self.interpreter);
+        resolver.resolve(&tree).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            self.had_error = true;
+        });
+
+        self.interpreter.interpret(tree).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            self.had_runtime_error = true;
+        });
     }
 
     fn run_file(&mut self, str_path: &str) -> io::Result<()> {

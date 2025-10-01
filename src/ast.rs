@@ -2,41 +2,63 @@ use crate::callable::Callable;
 use crate::token::Token;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use uuid::Timestamp;
+use uuid::{NoContext, Uuid};
+
+static EXPR_NODE_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+#[derive(Debug, Clone)]
+pub struct ExprNode {
+    expr: Expr,
+    id: String,
+}
+
+impl ExprNode {
+    pub fn new(expr: Expr) -> Self {
+        let id = EXPR_NODE_ID_COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .to_string();
+        Self { expr, id }
+    }
+
+    pub fn expr(&self) -> &Expr {
+        &self.expr
+    }
+
+    pub fn id(&self) -> &String {
+        &self.id
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Literal(LiteralObject),
-    Unary(Token, Box<Expr>),
-    Binary(Box<Expr>, Token, Box<Expr>),
-    Grouping(Box<Expr>),
-    Assignment(Token, Box<Expr>),
+    Unary(Token, Box<ExprNode>),
+    Binary(Box<ExprNode>, Token, Box<ExprNode>),
+    Grouping(Box<ExprNode>),
+    Assignment(Token, Box<ExprNode>),
     Var(Token),
-    Logical(Box<Expr>, Token, Box<Expr>),
+    Logical(Box<ExprNode>, Token, Box<ExprNode>),
     Call {
-        callee: Box<Expr>,
+        callee: Box<ExprNode>,
         paren: Token,
-        args: Vec<Expr>,
+        args: Vec<ExprNode>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub enum VarDecl {
-    Name(Token),
-    Expr(Box<Expr>),
-}
-
-#[derive(Debug, Clone)]
 pub enum Stmt {
-    ExprStmt(Box<Expr>),
-    PrintStmt(Box<Expr>),
-    VarDeclaration(Token, Option<Box<Expr>>),
+    ExprStmt(Box<ExprNode>),
+    PrintStmt(Box<ExprNode>),
+    VarDeclaration(Token, Option<Box<ExprNode>>),
     Block(Vec<Stmt>),
-    If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
-    While(Box<Expr>, Box<Stmt>),
+    If(Box<ExprNode>, Box<Stmt>, Option<Box<Stmt>>),
+    While(Box<ExprNode>, Box<Stmt>),
     // name, params, body
     Fn(Token, Vec<Token>, Vec<Stmt>),
     //keyword, value
-    Return(Token, Option<Box<Expr>>),
+    Return(Token, Option<Box<ExprNode>>),
 }
 
 #[derive(Clone)]

@@ -1,8 +1,7 @@
 use crate::ast::Expr::Literal;
-use crate::ast::LiteralObject;
 use crate::ast::{Expr, Stmt};
+use crate::ast::{ExprNode, LiteralObject};
 use crate::function::FnKind;
-use crate::interpreter::RuntimeError;
 use crate::token::TokenKind::LEFTBRACE;
 use crate::token::{Token, TokenKind};
 use thiserror::Error;
@@ -140,7 +139,7 @@ impl Parser {
     fn var_declaration(&mut self) -> Result<Stmt> {
         // `VAR` has already been matched by the caller (or you can do `self.consume(TokenType::VAR, "var")?`)
         let name = self.consume(TokenKind::IDENTIFIER, "variable name")?;
-        let mut initializer: Option<Expr> = None;
+        let mut initializer: Option<ExprNode> = None;
         if self.matches(&[TokenKind::EQUAL]) {
             initializer = Some(self.expression()?);
         }
@@ -299,13 +298,13 @@ impl Parser {
             Some(self.expr_statement()?)
         };
 
-        let mut condition: Option<Expr> = None;
+        let mut condition: Option<ExprNode> = None;
         if !self.check(TokenKind::SEMICOLON) {
             condition = Some(self.expression()?);
         }
         self.consume(TokenKind::SEMICOLON, "; after loop condition")?;
 
-        let mut increment: Option<Expr> = None;
+        let mut increment: Option<ExprNode> = None;
         if !self.check(TokenKind::RIGHTPAREN) {
             increment = Some(self.expression()?);
         }
@@ -316,10 +315,9 @@ impl Parser {
             body = Stmt::Block(Vec::from([body, Stmt::ExprStmt(Box::new(increment))]));
         }
 
-        body = Stmt::While(
-            Box::new(condition.unwrap_or(Expr::Literal(LiteralObject::Bool(true)))),
-            Box::new(body),
-        );
+        let condition =
+            Box::new(condition.unwrap_or(ExprNode::new(Literal(LiteralObject::Bool(true)))));
+        body = Stmt::While(condition, Box::new(body));
 
         if let Some(initializer) = initializer {
             body = Stmt::Block(Vec::from([initializer, body]));
@@ -343,17 +341,20 @@ impl Parser {
         Ok(Stmt::Return(keyword.clone(), value.map(Box::new)))
     }
 
-    fn expression(&mut self) -> Result<Expr> {
+    fn expression(&mut self) -> Result<ExprNode> {
         self.assignment()
     }
 
-    fn assignment(&mut self) -> Result<Expr> {
+    fn assignment(&mut self) -> Result<ExprNode> {
         let expr = self.or()?;
 
         if self.matches(&[TokenKind::EQUAL]) {
             let assignment = self.assignment()?;
-            return match expr {
-                Expr::Var(v) => Ok(Expr::Assignment(v.clone(), Box::new(assignment))),
+            return match expr.expr() {
+                Expr::Var(v) => Ok(ExprNode::new(Expr::Assignment(
+                    v.clone(),
+                    Box::new(assignment),
+                ))),
                 _ => {
                     let equals = self.previous();
                     Err(ParseError::InvalidAssignment {
@@ -366,41 +367,41 @@ impl Parser {
         Ok(expr)
     }
 
-    fn or(&mut self) -> Result<Expr> {
+    fn or(&mut self) -> Result<ExprNode> {
         let mut expr = self.and()?;
 
         while self.matches(&[TokenKind::OR]) {
             let op = self.previous().clone();
             let rhs = self.and()?;
-            expr = Expr::Logical(Box::new(expr), op, Box::new(rhs));
+            expr = ExprNode::new(Expr::Logical(Box::new(expr), op, Box::new(rhs)));
         }
         Ok(expr)
     }
 
-    fn and(&mut self) -> Result<Expr> {
+    fn and(&mut self) -> Result<ExprNode> {
         let mut expr = self.equality()?;
 
         while self.matches(&[TokenKind::AND]) {
             let op = self.previous().clone();
             let rhs = self.equality()?;
-            expr = Expr::Logical(Box::new(expr), op.clone(), Box::new(rhs))
+            expr = ExprNode::new(Expr::Logical(Box::new(expr), op.clone(), Box::new(rhs)))
         }
 
         Ok(expr)
     }
 
-    fn equality(&mut self) -> Result<Expr> {
+    fn equality(&mut self) -> Result<ExprNode> {
         let mut left = self.comparison()?;
 
         while self.matches(&[TokenKind::EQUALEQUAL, TokenKind::BANGEQUAL]) {
             let op = self.previous().clone();
             let right = self.comparison()?;
-            left = Expr::Binary(Box::new(left), op, Box::new(right));
+            left = ExprNode::new(Expr::Binary(Box::new(left), op, Box::new(right)));
         }
         Ok(left)
     }
 
-    fn comparison(&mut self) -> Result<Expr> {
+    fn comparison(&mut self) -> Result<ExprNode> {
         let mut lhs = self.term()?;
         while self.matches(&[
             TokenKind::GREATEREQUAL,
@@ -410,42 +411,42 @@ impl Parser {
         ]) {
             let op = self.previous().clone();
             let rhs = self.term()?;
-            lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs));
+            lhs = ExprNode::new(Expr::Binary(Box::new(lhs), op, Box::new(rhs)));
         }
         Ok(lhs)
     }
 
-    fn term(&mut self) -> Result<Expr> {
+    fn term(&mut self) -> Result<ExprNode> {
         let mut lhs = self.factor()?;
         while self.matches(&[TokenKind::PLUS, TokenKind::MINUS]) {
             let op = self.previous().clone();
             let rhs = self.factor()?;
-            lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs));
+            lhs = ExprNode::new(Expr::Binary(Box::new(lhs), op, Box::new(rhs)));
         }
         Ok(lhs)
     }
 
-    fn factor(&mut self) -> Result<Expr> {
+    fn factor(&mut self) -> Result<ExprNode> {
         let mut lhs = self.unary()?;
 
         while self.matches(&[TokenKind::SLASH, TokenKind::STAR]) {
             let op = self.previous().clone();
             let rhs = self.unary()?;
-            lhs = Expr::Binary(Box::new(lhs), op, Box::new(rhs))
+            lhs = ExprNode::new(Expr::Binary(Box::new(lhs), op, Box::new(rhs)));
         }
         Ok(lhs)
     }
 
-    fn unary(&mut self) -> Result<Expr> {
+    fn unary(&mut self) -> Result<ExprNode> {
         if self.matches(&[TokenKind::BANG, TokenKind::MINUS]) {
             let op = self.previous().clone();
             let rhs = self.unary()?;
-            return Ok(Expr::Unary(op, Box::new(rhs)));
+            return Ok(ExprNode::new(Expr::Unary(op, Box::new(rhs))));
         }
         self.call()
     }
 
-    fn call(&mut self) -> Result<Expr> {
+    fn call(&mut self) -> Result<ExprNode> {
         let mut expr = self.primary()?;
 
         loop {
@@ -459,8 +460,8 @@ impl Parser {
         Ok(expr)
     }
 
-    fn finish_call(&mut self, callee: &Expr) -> Result<Expr> {
-        let mut args: Vec<Expr> = Vec::new();
+    fn finish_call(&mut self, callee: &ExprNode) -> Result<ExprNode> {
+        let mut args: Vec<ExprNode> = Vec::new();
         if !self.check(TokenKind::RIGHTPAREN) {
             // we are expecting args.
             loop {
@@ -478,23 +479,23 @@ impl Parser {
         }
 
         let parenthesis = self.consume(TokenKind::RIGHTPAREN, ") after arguments")?;
-
-        Ok(Expr::Call {
+        let call = Expr::Call {
             callee: Box::new(callee.clone()),
             paren: parenthesis,
             args,
-        })
+        };
+        Ok(ExprNode::new(call))
     }
 
-    fn primary(&mut self) -> Result<Expr> {
+    fn primary(&mut self) -> Result<ExprNode> {
         if self.matches(&[TokenKind::FALSE]) {
-            return Ok(Literal(LiteralObject::Bool(false)));
+            return Ok(ExprNode::new(Literal(LiteralObject::Bool(false))));
         }
         if self.matches(&[TokenKind::TRUE]) {
-            return Ok(Literal(LiteralObject::Bool(true)));
+            return Ok(ExprNode::new(Literal(LiteralObject::Bool(true))));
         }
         if self.matches(&[TokenKind::NIL]) {
-            return Ok(Literal(LiteralObject::Nil));
+            return Ok(ExprNode::new(Literal(LiteralObject::Nil)));
         }
         if self.matches(&[TokenKind::NUMBER, TokenKind::STRING]) {
             let val = self
@@ -502,17 +503,19 @@ impl Parser {
                 .literal()
                 .clone()
                 .expect("num/string literal missing");
-            return Ok(Literal(val));
+            return Ok(ExprNode::new(Literal(val)));
         }
         if self.matches(&[TokenKind::LEFTPAREN]) {
             let expr = self.expression()?;
             let _ = self.consume(TokenKind::RIGHTPAREN, ")");
-            return Ok(Expr::Grouping(Box::new(expr)));
+
+            let grouping = ExprNode::new(Expr::Grouping(Box::new(expr)));
+            return Ok(grouping);
         }
 
         if self.matches(&[TokenKind::IDENTIFIER]) {
             let var_tok = self.previous().clone();
-            return Ok(Expr::Var(var_tok));
+            return Ok(ExprNode::new(Expr::Var(var_tok)));
         }
 
         // If nothing matched:
