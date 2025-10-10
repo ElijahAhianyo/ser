@@ -10,7 +10,7 @@ pub(crate) trait Callable: Display {
     ) -> Result<LiteralObject, RuntimeError>;
     fn arity(&self) -> usize;
 
-    fn name(&self) -> Option<String> {
+    fn name(&self) -> Option<&String> {
         None
     }
 }

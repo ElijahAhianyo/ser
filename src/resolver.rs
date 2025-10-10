@@ -1,4 +1,5 @@
 use crate::ast::{Expr, ExprNode, Stmt};
+use crate::function::FnKind;
 use crate::interpreter::Interpreter;
 use crate::token::Token;
 use std::collections::HashMap;
@@ -12,13 +13,24 @@ pub enum ResolverError {
     VariableAlreadyDeclared(String),
     #[error("Cannot return from top-level code at line {0}.")]
     ReturnFromTopLevel(usize),
+    #[error("Cannot use 'this' outside of a class at line {0}.")]
+    ThisOutsideClass(usize),
+    #[error("{message}")]
+    Generic { message: String },
+}
+
+impl ResolverError {
+    pub fn generic(message: String) -> Self {
+        ResolverError::Generic { message }
+    }
 }
 
 #[derive(Debug)]
 pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, bool>>,
     interpreter: &'a mut Interpreter,
-    fn_depth: usize,
+    current_fn: (usize, FnKind),
+    class_depth: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -26,7 +38,8 @@ impl<'a> Resolver<'a> {
         Self {
             scopes: Vec::new(),
             interpreter,
-            fn_depth: 0,
+            current_fn: (0, FnKind::None),
+            class_depth: 0,
         }
     }
 
@@ -56,20 +69,35 @@ impl<'a> Resolver<'a> {
                 self.declare(ident)?;
                 self.define(ident);
 
-                // Enter function context
-                let enclosing_depth = self.fn_depth;
-                self.fn_depth += 1;
+                self.resolve_function(statement, FnKind::Function)?;
+            }
 
+            Stmt::Class(ident, methods) => {
+                let enclosing_class_depth = self.class_depth;
+                self.class_depth += 1;
+
+                self.declare(ident)?;
+                self.define(ident);
+
+                // create a new scope and add "this" to it
+                // so that its visible to all methods in the class.
                 self.begin_scope();
-                for p in params {
-                    self.declare(p)?;
-                    self.define(p);
-                }
-                self.resolve(body)?;
-                self.end_scope();
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert("this".to_string(), true);
 
-                // Restore previous function context
-                self.fn_depth = enclosing_depth;
+                for method in methods {
+                    let fn_kind = FnKind::Method;
+                    if let Stmt::Fn(name_tok, _, _) = method {
+                        if name_tok.lexeme() == "init" {
+                            self.current_fn = (self.current_fn.0, FnKind::Initializer);
+                        }
+                    }
+                    self.resolve_function(method, fn_kind)?;
+                }
+                self.end_scope();
+                self.class_depth = enclosing_class_depth;
             }
 
             Stmt::ExprStmt(expr) => self.resolve_expr(expr)?,
@@ -89,8 +117,13 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(&*expr)?;
             }
             Stmt::Return(keyword, value) => {
-                if self.fn_depth == 0 {
+                if self.current_fn.0 == 0 {
                     return Err(ResolverError::ReturnFromTopLevel(keyword.line()));
+                }
+                if self.current_fn.1 == FnKind::Initializer {
+                    return Err(ResolverError::generic(
+                        "Cannot return a value from an initializer.".to_string(),
+                    ));
                 }
                 if let Some(value) = value {
                     self.resolve_expr(&*value)?;
@@ -152,6 +185,26 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(arg)?
                 }
             }
+            Expr::Get { obj, name } => {
+                self.resolve_expr(&*obj)?;
+            }
+
+            Expr::Set { obj, name, value } => {
+                self.resolve_expr(&*obj)?;
+                self.resolve_expr(&*value)?;
+            }
+
+            Expr::This(token) => {
+                // if self.scopes.is_empty() {
+                //     return Err(ResolverError::VariableNotInitialized(
+                //         token.lexeme().clone(),
+                //     ));
+                // }
+                if self.class_depth == 0 {
+                    return Err(ResolverError::ThisOutsideClass(token.line()));
+                }
+                self.resolve_local(token.lexeme(), expr_node)?;
+            }
         }
         Ok(())
     }
@@ -164,6 +217,26 @@ impl<'a> Resolver<'a> {
             }
         }
         Ok(())
+    }
+
+    fn resolve_function(&mut self, function: &Stmt, _kind: FnKind) -> Result<(), ResolverError> {
+        if let Stmt::Fn(_ident, params, body) = function {
+            let (enclosing_depth, fn_kind) = self.current_fn;
+            self.current_fn = (enclosing_depth + 1, fn_kind);
+
+            self.begin_scope();
+            for p in params {
+                self.declare(p)?;
+                self.define(p);
+            }
+            self.resolve(body)?;
+            self.end_scope();
+
+            self.current_fn = (enclosing_depth, fn_kind);
+            Ok(())
+        } else {
+            Err(ResolverError::ReturnFromTopLevel(0)) // Dummy error, should not happen
+        }
     }
 
     fn end_scope(&mut self) {
