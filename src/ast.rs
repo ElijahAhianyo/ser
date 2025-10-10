@@ -1,10 +1,10 @@
 use crate::callable::Callable;
+use crate::class::{Class, Instance};
 use crate::token::Token;
+use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use uuid::Timestamp;
-use uuid::{NoContext, Uuid};
 
 static EXPR_NODE_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -45,6 +45,16 @@ pub enum Expr {
         paren: Token,
         args: Vec<ExprNode>,
     },
+    Get {
+        obj: Box<ExprNode>,
+        name: Token,
+    },
+    Set {
+        obj: Box<ExprNode>,
+        name: Token,
+        value: Box<ExprNode>,
+    },
+    This(Token),
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +69,8 @@ pub enum Stmt {
     Fn(Token, Vec<Token>, Vec<Stmt>),
     //keyword, value
     Return(Token, Option<Box<ExprNode>>),
+    // name, methods
+    Class(Token, Vec<Stmt>),
 }
 
 #[derive(Clone)]
@@ -68,6 +80,7 @@ pub(crate) enum LiteralObject {
     Bool(bool),
     Nil,
     Callable(Rc<dyn Callable>), // Rc here so the callable is thread-safe. cheap clones.
+    Instance(Rc<RefCell<Instance>>),
 }
 
 impl Display for LiteralObject {
@@ -85,6 +98,7 @@ impl Display for LiteralObject {
             LiteralObject::Str(val) => val.clone(),
             LiteralObject::Bool(b) => b.to_string(),
             LiteralObject::Callable(c) => c.to_string(),
+            LiteralObject::Instance(i) => i.borrow().to_string(),
         };
 
         write!(f, "{}", display)
@@ -92,7 +106,7 @@ impl Display for LiteralObject {
 }
 
 impl std::fmt::Debug for LiteralObject {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             LiteralObject::Number(num) => f.debug_tuple("Number").field(num).finish(),
             LiteralObject::Str(val) => f.debug_tuple("Str").field(val).finish(),
@@ -101,6 +115,10 @@ impl std::fmt::Debug for LiteralObject {
             LiteralObject::Callable(c) => f
                 .debug_tuple("Callable")
                 .field(&format!("<{}>", c.to_string()))
+                .finish(),
+            LiteralObject::Instance(instance) => f
+                .debug_tuple("Instance")
+                .field(&format!("<{}>", instance.borrow().to_string()))
                 .finish(),
         }
     }

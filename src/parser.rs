@@ -2,7 +2,7 @@ use crate::ast::Expr::Literal;
 use crate::ast::{Expr, Stmt};
 use crate::ast::{ExprNode, LiteralObject};
 use crate::function::FnKind;
-use crate::token::TokenKind::LEFTBRACE;
+use crate::token::TokenKind::{LEFTBRACE, RIGHTBRACE};
 use crate::token::{Token, TokenKind};
 use thiserror::Error;
 
@@ -131,7 +131,11 @@ impl Parser {
         }
 
         if self.matches(&[TokenKind::FN]) {
-            return self.function(FnKind::Named);
+            return self.function(FnKind::Function);
+        }
+
+        if self.matches(&[TokenKind::CLASS]) {
+            return self.class();
         }
         self.statement()
     }
@@ -196,6 +200,19 @@ impl Parser {
             }
         };
         Ok(Stmt::Fn(token_name, params, body))
+    }
+
+    fn class(&mut self) -> Result<Stmt> {
+        let name = self.consume(TokenKind::IDENTIFIER, "Expect class name")?;
+        self.consume(LEFTBRACE, "Expect '{' before class body")?;
+
+        let mut methods: Vec<Stmt> = Vec::new();
+        while !self.check(TokenKind::RIGHTBRACE) && !self.is_at_end() {
+            methods.push(self.function(FnKind::Method)?);
+        }
+
+        self.consume(RIGHTBRACE, "Expect '}' after class body")?;
+        Ok(Stmt::Class(name, methods))
     }
 
     fn statement(&mut self) -> Result<Stmt> {
@@ -355,6 +372,11 @@ impl Parser {
                     v.clone(),
                     Box::new(assignment),
                 ))),
+                Expr::Get { obj, name } => Ok(ExprNode::new(Expr::Set {
+                    obj: obj.clone(),
+                    name: name.clone(),
+                    value: Box::new(assignment),
+                })),
                 _ => {
                     let equals = self.previous();
                     Err(ParseError::InvalidAssignment {
@@ -452,6 +474,15 @@ impl Parser {
         loop {
             if self.matches(&[TokenKind::LEFTPAREN]) {
                 expr = self.finish_call(&expr)?;
+            } else if self.matches(&[TokenKind::DOT]) {
+                // this allows us to capture examples like `a.b.c`
+                // which results in
+                // `Get {obj: Box::new(Get {obj: Box::new(Var(a)), name: b}), name: c}`
+                let name = self.consume(TokenKind::IDENTIFIER, "Expect property name after '.'")?;
+                expr = ExprNode::new(Expr::Get {
+                    obj: Box::new(expr),
+                    name: name.clone(),
+                });
             } else {
                 break;
             }
@@ -516,6 +547,10 @@ impl Parser {
         if self.matches(&[TokenKind::IDENTIFIER]) {
             let var_tok = self.previous().clone();
             return Ok(ExprNode::new(Expr::Var(var_tok)));
+        }
+
+        if self.matches(&[TokenKind::THIS]) {
+            return Ok(ExprNode::new(Expr::This(self.previous().clone())));
         }
 
         // If nothing matched:

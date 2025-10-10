@@ -1,5 +1,6 @@
 use crate::ast::{LiteralObject, Stmt};
 use crate::callable::Callable;
+use crate::class::Instance;
 use crate::environment::{EnvKey, Environment};
 use crate::interpreter::{EvalResult, ExecFlow, Interpreter, RuntimeError};
 use crate::token::Token;
@@ -49,32 +50,59 @@ impl Callable for BuiltinFunction {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct UserDefinedFunction {
+pub(crate) struct UserFnMeta {
     name: Option<String>, // option to support anonymous functions as well as named.
     params: Vec<Token>,
     body: Vec<Stmt>,
-    parent_env: Rc<RefCell<Environment>>, // env where the function was created / defined.
+}
+
+impl UserFnMeta {
+    pub fn new(name: Option<String>, params: Vec<Token>, body: Vec<Stmt>) -> Self {
+        Self { name, params, body }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserDefinedFunction {
+    meta: UserFnMeta,
+    is_init: bool, // whether this function is an initializer (constructor) for a class
+    parent_env: Rc<RefCell<Environment>>, // env(closure) where the function was created / defined.
 }
 
 impl UserDefinedFunction {
-    pub fn new(
-        name: Option<String>,
-        params: Vec<Token>,
-        body: Vec<Stmt>,
-        parent_env: Rc<RefCell<Environment>>,
-    ) -> Self {
+    pub fn new(meta: UserFnMeta, parent_env: Rc<RefCell<Environment>>, is_init: bool) -> Self {
         Self {
-            name,
-            params,
-            body,
+            meta,
             parent_env,
+            is_init,
         }
+    }
+
+    pub fn bind(&mut self, instance: Rc<RefCell<Instance>>) -> Result<LiteralObject, RuntimeError> {
+        // when binding a method to an instance, we need to create a new environment
+        // that has the instance as "this" and the parent environment as the function's parent
+        // environment.
+        let mut environ = Environment::new(Some(self.parent_env.clone()));
+        environ.set(
+            EnvKey::String("this"),
+            Some(LiteralObject::Instance(instance.clone())),
+        )?;
+        let literal = LiteralObject::Callable(Rc::new(UserDefinedFunction {
+            meta: self.meta.clone(),
+            parent_env: Rc::new(RefCell::new(environ)),
+            is_init: self.is_init,
+        }));
+        Ok(literal)
     }
 }
 
 impl Display for UserDefinedFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{:?}>", self.name)
+        write!(
+            f,
+            "<{:?}>",
+            self.meta.name.as_ref().unwrap_or(&"anonymous".to_string())
+        )
     }
 }
 
@@ -90,30 +118,43 @@ impl Callable for UserDefinedFunction {
             self.parent_env.clone(),
         ))));
 
-        for (i, param) in self.params.iter().enumerate() {
+        for (i, param) in self.meta.params.iter().enumerate() {
             let val = args.get(i).cloned().unwrap_or(LiteralObject::Nil);
             env.borrow_mut().set(EnvKey::Token(param), Some(val))?;
         }
 
-        let exec_block = interpreter.execute_block(self.body.clone(), env)?;
+        let exec_block = interpreter.execute_block(self.meta.body.clone(), env)?;
         match exec_block {
             ExecFlow::Return(ret) => Ok(ret),
             // ignore all other flows for now.
+            _ if self.is_init => {
+                // if this is an initializer, we need to return the `this`/current instance which lives in the parent env.
+                if let Some(LiteralObject::Instance(instance)) = self.parent_env.borrow().get_at(
+                    self.parent_env.clone(),
+                    0,
+                    EnvKey::String("this"),
+                )? {
+                    return Ok(LiteralObject::Instance(instance));
+                }
+                Ok(LiteralObject::Nil)
+            }
             _ => Ok(LiteralObject::Nil),
         }
     }
 
     fn arity(&self) -> usize {
-        self.params.len()
+        self.meta.params.len()
     }
 
-    fn name(&self) -> Option<String> {
-        self.name.clone()
+    fn name(&self) -> Option<&String> {
+        self.meta.name.as_ref()
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FnKind {
     Method,
-    Named,
+    Function,
+    Initializer,
+    None,
 }

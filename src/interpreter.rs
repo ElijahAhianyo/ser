@@ -1,8 +1,10 @@
 use crate::ast::{Expr, Stmt};
 use crate::ast::{ExprNode, LiteralObject};
 use crate::builtins::clock;
+use crate::callable::Callable;
+use crate::class::Class;
 use crate::environment::{EnvKey, Environment};
-use crate::function::UserDefinedFunction;
+use crate::function::{UserDefinedFunction, UserFnMeta};
 use crate::token::{Token, TokenKind};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -282,7 +284,10 @@ impl Interpreter {
                 };
 
                 if callee.arity() != args.len() {
-                    let name = callee.name().unwrap_or("<anonymous fn>".to_string());
+                    let name = callee
+                        .name()
+                        .cloned()
+                        .unwrap_or_else(|| "anonymous".to_string());
                     return Err(RuntimeError::invalid_arity(
                         name,
                         callee.arity(),
@@ -296,7 +301,59 @@ impl Interpreter {
                     arg_list.push(self.evaluate(arg.clone())?);
                 }
 
-                callee.call(self, arg_list).into()
+                callee.call(self, arg_list)
+            }
+
+            Expr::Get { obj, name } => {
+                let obj = self.evaluate(*(*obj).clone())?;
+
+                match &obj {
+                    LiteralObject::Instance(instance) => instance
+                        .borrow_mut()
+                        .get(name.lexeme().to_string())
+                        .ok_or_else(|| {
+                            RuntimeError::invalid_operation(
+                                name.clone(),
+                                format!(
+                                    "get on {}. no prop named {:?}",
+                                    obj.clone().to_string(),
+                                    name.lexeme()
+                                ),
+                            )
+                        }),
+                    _ => Err(RuntimeError::invalid_operation(
+                        name.clone(),
+                        format!(
+                            "get on {}. Only instances can have properties",
+                            obj.to_string()
+                        ),
+                    )),
+                }
+            }
+
+            Expr::Set { obj, name, value } => {
+                let obj = self.evaluate(*(*obj).clone())?;
+                match obj {
+                    LiteralObject::Instance(instance) => {
+                        let value = self.evaluate(*value.clone())?;
+                        instance
+                            .borrow_mut()
+                            .set(name.lexeme().clone(), value.clone());
+                        Ok(value)
+                    }
+                    _ => Err(RuntimeError::invalid_operation(
+                        name.clone(),
+                        format!("set on {}", obj.to_string()),
+                    )),
+                }
+            }
+
+            Expr::This(token) => {
+                let this = self.lookup_variable(token, expr_id)?;
+                match this {
+                    Some(obj) => Ok(obj.clone()),
+                    None => Err(RuntimeError::undefined_variable(token.lexeme().to_string())),
+                }
             }
         }
     }
@@ -357,17 +414,50 @@ impl Interpreter {
             }
 
             Stmt::Fn(name, params, body) => {
-                let func = UserDefinedFunction::new(
+                let meta = UserFnMeta::new(
                     Some(name.lexeme().to_string()),
                     params.clone(),
                     body.clone(),
-                    self.env.clone(),
                 );
+                let func = UserDefinedFunction::new(meta, self.env.clone(), false);
                 // whenever we define a fn(or come across a fn declaration stmt), we should save this in the environment so it can be looked up
                 let func_obj = LiteralObject::Callable(Rc::new(func));
                 self.env
                     .borrow_mut()
                     .set(EnvKey::Token(name), Some(func_obj))?;
+                Ok(ExecFlow::Normal)
+            }
+
+            Stmt::Class(name, methods) => {
+                self.env.borrow_mut().set(EnvKey::Token(name), None)?;
+
+                let mut method_map: HashMap<String, UserDefinedFunction> = HashMap::new();
+                for method in methods {
+                    match method {
+                        Stmt::Fn(name, params, body) => {
+                            let func = {
+                                let meta = UserFnMeta::new(
+                                    Some(name.lexeme().to_string()),
+                                    params.clone(),
+                                    body.clone(),
+                                );
+                                UserDefinedFunction::new(
+                                    meta,
+                                    self.env.clone(),
+                                    name.lexeme() == "init",
+                                )
+                            };
+                            method_map.insert(name.lexeme().to_string(), func);
+                        }
+                        _ => {}
+                    }
+                }
+
+                let class = LiteralObject::Callable(Rc::new(Class::new(
+                    name.lexeme().to_string(),
+                    method_map,
+                )));
+                self.env.borrow_mut().assign(EnvKey::Token(name), class)?;
                 Ok(ExecFlow::Normal)
             }
 
