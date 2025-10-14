@@ -2,7 +2,7 @@ use crate::ast::Expr::Literal;
 use crate::ast::{Expr, Stmt};
 use crate::ast::{ExprNode, LiteralObject};
 use crate::function::FnKind;
-use crate::token::TokenKind::{LEFTBRACE, RIGHTBRACE};
+use crate::token::TokenKind::{IDENTIFIER, LEFTBRACE, RIGHTBRACE};
 use crate::token::{Token, TokenKind};
 use thiserror::Error;
 
@@ -204,6 +204,14 @@ impl Parser {
 
     fn class(&mut self) -> Result<Stmt> {
         let name = self.consume(TokenKind::IDENTIFIER, "Expect class name")?;
+
+        let superclass = if self.matches(&[TokenKind::LESS]) {
+            let id = self.consume(IDENTIFIER, "Expect superclass name after '<'")?;
+            Some(ExprNode::new(Expr::Var(id)))
+        } else {
+            None
+        };
+
         self.consume(LEFTBRACE, "Expect '{' before class body")?;
 
         let mut methods: Vec<Stmt> = Vec::new();
@@ -212,7 +220,7 @@ impl Parser {
         }
 
         self.consume(RIGHTBRACE, "Expect '}' after class body")?;
-        Ok(Stmt::Class(name, methods))
+        Ok(Stmt::Class(name, superclass.map(Box::new), methods))
     }
 
     fn statement(&mut self) -> Result<Stmt> {
@@ -551,6 +559,13 @@ impl Parser {
 
         if self.matches(&[TokenKind::THIS]) {
             return Ok(ExprNode::new(Expr::This(self.previous().clone())));
+        }
+
+        if self.matches(&[TokenKind::SUPER]) {
+            let kw = self.previous().clone();
+            self.consume(TokenKind::DOT, "Expect '.' after 'super'")?;
+            let method = self.consume(TokenKind::IDENTIFIER, "Expect superclass method name")?;
+            return Ok(ExprNode::new(Expr::Super(kw.clone(), method.clone())));
         }
 
         // If nothing matched:

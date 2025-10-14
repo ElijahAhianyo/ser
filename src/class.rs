@@ -2,6 +2,7 @@ use crate::ast::LiteralObject;
 use crate::callable::Callable;
 use crate::function::UserDefinedFunction;
 use crate::interpreter::{Interpreter, RuntimeError};
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -11,15 +12,45 @@ use std::rc::Rc;
 pub struct Class {
     name: String,
     methods: HashMap<String, UserDefinedFunction>,
+    super_class: Option<Box<Class>>,
 }
 
 impl Class {
-    pub fn new(name: String, methods: HashMap<String, UserDefinedFunction>) -> Self {
-        Self { name, methods }
+    pub fn new(
+        name: String,
+        methods: HashMap<String, UserDefinedFunction>,
+        super_class: Option<Class>,
+    ) -> Self {
+        Self {
+            name,
+            methods,
+            super_class: super_class.map(Box::new),
+        }
     }
 
     pub fn get_method<K: AsRef<str>>(&self, name: K) -> Option<&UserDefinedFunction> {
-        self.methods.get(name.as_ref())
+        let name = name.as_ref();
+        if let Some(method) = self.methods.get(name) {
+            return Some(method);
+        }
+
+        if let Some(super_class) = &self.super_class {
+            return super_class.get_method(name);
+        }
+
+        None
+    }
+
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
+    pub fn methods(&self) -> &HashMap<String, UserDefinedFunction> {
+        &self.methods
+    }
+
+    pub fn super_class(&self) -> &Option<Box<Class>> {
+        &self.super_class
     }
 }
 
@@ -64,6 +95,10 @@ impl Callable for Class {
 
     fn name(&self) -> Option<&String> {
         Some(&self.name)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -110,4 +145,11 @@ impl Display for Instance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} instance", self.class)
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ClassKind {
+    NONE,
+    CLASS,
+    SUBCLASS,
 }

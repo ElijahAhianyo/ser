@@ -1,4 +1,5 @@
 use crate::ast::{Expr, ExprNode, Stmt};
+use crate::class::ClassKind;
 use crate::function::FnKind;
 use crate::interpreter::Interpreter;
 use crate::token::Token;
@@ -30,7 +31,7 @@ pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, bool>>,
     interpreter: &'a mut Interpreter,
     current_fn: (usize, FnKind),
-    class_depth: usize,
+    current_class: (usize, ClassKind),
 }
 
 impl<'a> Resolver<'a> {
@@ -39,7 +40,7 @@ impl<'a> Resolver<'a> {
             scopes: Vec::new(),
             interpreter,
             current_fn: (0, FnKind::None),
-            class_depth: 0,
+            current_class: (0, ClassKind::NONE),
         }
     }
 
@@ -72,12 +73,43 @@ impl<'a> Resolver<'a> {
                 self.resolve_function(statement, FnKind::Function)?;
             }
 
-            Stmt::Class(ident, methods) => {
-                let enclosing_class_depth = self.class_depth;
-                self.class_depth += 1;
+            Stmt::Class(ident, super_class, methods) => {
+                let enclosing_class_depth = self.current_class;
+                self.current_class = (enclosing_class_depth.0 + 1, self.current_class.1);
 
                 self.declare(ident)?;
                 self.define(ident);
+
+                // resolve the super class.
+                if let Some(super_class) = super_class {
+                    if let Expr::Var(sc) = super_class.expr() {
+                        // the superclass cannot be the same as the subclass
+                        if sc.lexeme() == ident.lexeme() {
+                            return Err(ResolverError::generic(
+                                "A class cannot inherit from itself.".to_string(),
+                            ));
+                        }
+                    }
+                    if self.current_class.1 == ClassKind::NONE {
+                        return Err(ResolverError::generic(
+                            "cannot use 'super' outside of a class".to_string(),
+                        ));
+                    } else if self.current_class.1 != ClassKind::SUBCLASS {
+                        return Err(ResolverError::generic(
+                            "cannot use 'super' in a class with no superclass".to_string(),
+                        ));
+                    }
+                    self.resolve_expr(&*super_class)?;
+                }
+
+                // if there is a super class, we need to create a new scope and add "super" to it
+                if super_class.is_some() {
+                    self.begin_scope();
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert("super".to_string(), true);
+                }
 
                 // create a new scope and add "this" to it
                 // so that its visible to all methods in the class.
@@ -97,7 +129,12 @@ impl<'a> Resolver<'a> {
                     self.resolve_function(method, fn_kind)?;
                 }
                 self.end_scope();
-                self.class_depth = enclosing_class_depth;
+
+                // discard the "super" scope.
+                if super_class.is_some() {
+                    self.end_scope();
+                }
+                self.current_class = enclosing_class_depth;
             }
 
             Stmt::ExprStmt(expr) => self.resolve_expr(expr)?,
@@ -200,10 +237,14 @@ impl<'a> Resolver<'a> {
                 //         token.lexeme().clone(),
                 //     ));
                 // }
-                if self.class_depth == 0 {
+                if self.current_class.0 == 0 {
                     return Err(ResolverError::ThisOutsideClass(token.line()));
                 }
                 self.resolve_local(token.lexeme(), expr_node)?;
+            }
+
+            Expr::Super(kw, method) => {
+                self.resolve_local(kw.lexeme(), expr_node)?;
             }
         }
         Ok(())
