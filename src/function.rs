@@ -5,6 +5,7 @@ use crate::environment::{EnvKey, Environment};
 use crate::interpreter::{EvalResult, ExecFlow, Interpreter, RuntimeError};
 use crate::token::Token;
 use anyhow::Result;
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
@@ -46,6 +47,10 @@ impl Callable for BuiltinFunction {
 
     fn arity(&self) -> usize {
         self.arity
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -148,6 +153,10 @@ impl Callable for UserDefinedFunction {
 
     fn name(&self) -> Option<&String> {
         self.meta.name.as_ref()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

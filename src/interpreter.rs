@@ -355,6 +355,57 @@ impl Interpreter {
                     None => Err(RuntimeError::undefined_variable(token.lexeme().to_string())),
                 }
             }
+
+            Expr::Super(kw, method) => {
+                // we need to find the superclass and the instance of "this" in the environment
+                // at the distance recorded for "super" and "this" respectively.
+                // then we need to find the method on the superclass and bind it to the instance of "this"
+                // and return the bound method as a LiteralObject::Callable
+                // if any of these steps fail, we return an appropriate runtime error.
+
+                // TODO: refactor this
+                let distance = self.locals.get(&method.lexeme().clone()).unwrap();
+                let super_class = self.env.borrow().get_at(
+                    self.env.clone(),
+                    *distance,
+                    EnvKey::String("super"),
+                )?;
+                let object = self.env.borrow().get_at(
+                    self.env.clone(),
+                    *distance - 1,
+                    EnvKey::String("this"),
+                )?;
+                if let Some(super_class) = super_class {
+                    if let LiteralObject::Callable(callable) = super_class {
+                        let class = callable
+                            .as_any()
+                            .downcast_ref::<Class>()
+                            .ok_or(RuntimeError::custom("super must be a class"))?;
+                        if let Some(method) = class.get_method(&method.lexeme()) {
+                            if let Some(object) = object {
+                                if let LiteralObject::Instance(instance) = object {
+                                    return method.clone().bind(instance);
+                                } else {
+                                    return Err(RuntimeError::custom(
+                                        "could not find instance for 'this'",
+                                    ));
+                                }
+                            } else {
+                                return Err(RuntimeError::custom(
+                                    "could not find instance for 'this'",
+                                ));
+                            }
+                        } else {
+                            return Err(RuntimeError::custom(format!(
+                                "could not find method {} on superclass {}",
+                                method.lexeme(),
+                                class.name()
+                            )));
+                        }
+                    }
+                }
+                Err(RuntimeError::custom("super must be a class"))
+            }
         }
     }
 
@@ -428,8 +479,35 @@ impl Interpreter {
                 Ok(ExecFlow::Normal)
             }
 
-            Stmt::Class(name, methods) => {
+            Stmt::Class(name, super_class, methods) => {
+                let super_class = if let Some(sc) = super_class {
+                    if let Ok(LiteralObject::Callable(callable)) = self.evaluate(*sc.clone()) {
+                        let c = callable
+                            .as_any()
+                            .downcast_ref::<Class>()
+                            .cloned()
+                            .ok_or_else(|| {
+                                RuntimeError::custom("superclass must be a class name")
+                            })?;
+                        Some(c)
+                    } else {
+                        return Err(RuntimeError::custom("superclass must be a class name"));
+                    }
+                } else {
+                    None
+                };
+
                 self.env.borrow_mut().set(EnvKey::Token(name), None)?;
+
+                if let Some(super_class) = &super_class {
+                    let enclosing_env = self.env.clone();
+                    let super_env = Rc::new(RefCell::new(Environment::new(Some(enclosing_env))));
+                    super_env.borrow_mut().set(
+                        EnvKey::String("super"),
+                        Some(LiteralObject::Callable(Rc::new(super_class.clone()))),
+                    )?;
+                    self.env = super_env;
+                }
 
                 let mut method_map: HashMap<String, UserDefinedFunction> = HashMap::new();
                 for method in methods {
@@ -456,7 +534,14 @@ impl Interpreter {
                 let class = LiteralObject::Callable(Rc::new(Class::new(
                     name.lexeme().to_string(),
                     method_map,
+                    super_class.clone(),
                 )));
+
+                // restore the previous environment if we had a superclass
+                if super_class.is_some() {
+                    let enclosing = self.env.borrow().enclosing().clone().unwrap();
+                    self.env = enclosing;
+                }
                 self.env.borrow_mut().assign(EnvKey::Token(name), class)?;
                 Ok(ExecFlow::Normal)
             }

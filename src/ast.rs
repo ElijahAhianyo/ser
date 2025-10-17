@@ -55,6 +55,8 @@ pub enum Expr {
         value: Box<ExprNode>,
     },
     This(Token),
+    // keyword, method
+    Super(Token, Token),
 }
 
 #[derive(Debug, Clone)]
@@ -69,8 +71,8 @@ pub enum Stmt {
     Fn(Token, Vec<Token>, Vec<Stmt>),
     //keyword, value
     Return(Token, Option<Box<ExprNode>>),
-    // name, methods
-    Class(Token, Vec<Stmt>),
+    // name, superclass ,methods
+    Class(Token, Option<Box<ExprNode>>, Vec<Stmt>),
 }
 
 #[derive(Clone)]

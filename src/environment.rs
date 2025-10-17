@@ -113,6 +113,10 @@ impl Environment {
         }
         environment
     }
+
+    pub fn enclosing(&self) -> Option<Rc<RefCell<Environment>>> {
+        self.enclosing.clone()
+    }
 }
 
 impl Display for Environment {
