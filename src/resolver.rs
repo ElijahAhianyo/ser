@@ -90,15 +90,6 @@ impl<'a> Resolver<'a> {
                             ));
                         }
                     }
-                    if self.current_class.1 == ClassKind::NONE {
-                        return Err(ResolverError::generic(
-                            "cannot use 'super' outside of a class".to_string(),
-                        ));
-                    } else if self.current_class.1 != ClassKind::SUBCLASS {
-                        return Err(ResolverError::generic(
-                            "cannot use 'super' in a class with no superclass".to_string(),
-                        ));
-                    }
                     self.resolve_expr(&*super_class)?;
                 }
 
@@ -244,6 +235,17 @@ impl<'a> Resolver<'a> {
             }
 
             Expr::Super(kw, method) => {
+                // make sure we're either inside a subclass or not at the top level.
+                if self.current_class.1 == ClassKind::NONE {
+                    return Err(ResolverError::generic(
+                        "cannot use 'super' outside of a class".to_string(),
+                    ));
+                } else if self.current_class.1 != ClassKind::SUBCLASS {
+                    return Err(ResolverError::generic(
+                        "cannot use 'super' in a class with no superclass".to_string(),
+                    ));
+                }
+
                 self.resolve_local(kw.lexeme(), expr_node)?;
             }
         }
